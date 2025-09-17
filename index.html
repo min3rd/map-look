@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Map Look - 3D từ OSM</title>
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet.draw -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <!-- osmtogeojson for converting OSM to GeoJSON -->
+    <script src="https://cdn.jsdelivr.net/npm/osmtogeojson@3.0.0-beta.5/osmtogeojson.min.js"></script>
+    <!-- Three.js -->
+    <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+    <style>
+      html,body,#app { height: 100%; }
+    </style>
+  </head>
+  <body class="bg-gray-100">
+    <div id="app" class="flex h-full">
+      <div id="left" class="w-1/2 p-2">
+        <div class="bg-white rounded shadow h-full flex flex-col">
+          <div class="p-2 border-b">
+            <h1 class="text-lg font-semibold">Map Look - chọn khu vực</h1>
+            <p class="text-sm text-gray-600">Dùng công cụ vẽ để quét 1 khu vực trên bản đồ</p>
+          </div>
+          <div id="map" class="flex-1"></div>
+          <div class="p-2 border-t flex space-x-2">
+            <button id="btn-fetch" class="px-3 py-1 bg-blue-600 text-white rounded">Fetch & Build 3D</button>
+            <button id="btn-clear" class="px-3 py-1 bg-gray-200 rounded">Clear</button>
+            <div id="status" class="text-sm text-gray-600 self-center"></div>
+          </div>
+        </div>
+      </div>
+      <div id="right" class="w-1/2 p-2">
+        <div class="bg-white rounded shadow h-full flex flex-col">
+          <div class="p-2 border-b">
+            <h2 class="text-lg font-semibold">3D Viewer</h2>
+            <p class="text-sm text-gray-600">Hiển thị mô hình 3D sinh ra từ dữ liệu OSM</p>
+          </div>
+          <div id="viewer" class="flex-1 bg-black"></div>
+          <div class="p-2 border-t text-sm text-gray-600">
+            <div>Controls: Drag to rotate, scroll to zoom</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
