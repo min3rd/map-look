@@ -180,7 +180,7 @@ function parseOSM(osm, bboxCenter) {
     // process ways
     for (const [id, way] of waysIndex) {
         const tags = way.tags || {};
-        const coords = (way.nodes||[]).map(id => { const n = nodes.get(id); return n ? [n.lat, n.lon] : null; }).filter(Boolean);
+        const coords = (way.nodes || []).map(id => { const n = nodes.get(id); return n ? [n.lat, n.lon] : null; }).filter(Boolean);
         if (tags.building) {
             const height = tags.height ? parseFloat(tags.height) : (tags['building:levels'] ? parseFloat(tags['building:levels']) * 3 : 10);
             buildings.push({ coords, height, tags });
@@ -221,7 +221,7 @@ function parseOSM(osm, bboxCenter) {
                 if (m.type === 'way' && (m.role === 'outer' || !m.role)) {
                     const w = waysIndex.get(m.ref);
                     if (!w) continue;
-                    const coords = (w.nodes||[]).map(id => { const n = nodes.get(id); return n ? [n.lat, n.lon] : null; }).filter(Boolean);
+                    const coords = (w.nodes || []).map(id => { const n = nodes.get(id); return n ? [n.lat, n.lon] : null; }).filter(Boolean);
                     outerWays.push(coords);
                 }
             }
@@ -271,18 +271,137 @@ function parseOSM(osm, bboxCenter) {
     const hillMeshes = hills.map(h => ({ pts: h.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: h.tags }));
     // convert infra
     const infraMeshes = {
-        hospitals: infra.hospitals.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        schools: infra.schools.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        busStops: infra.busStops.map(i=>({ pos: i.coord ? latLonToMeters(i.coord[0], i.coord[1], origin) : null, tags: i.tags })),
-        power: infra.power.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        parking: infra.parking.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        industrial: infra.industrial.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        airports: infra.airports.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        bridges: infra.bridges.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
-        rails: infra.rails.map(i=>({ pts: i.pts ? i.pts.map(c=>latLonToMeters(c[0],c[1],origin)) : i.coords.map(c=>latLonToMeters(c[0],c[1],origin)), tags: i.tags })),
+        hospitals: infra.hospitals.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        schools: infra.schools.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        busStops: infra.busStops.map(i => ({ pos: i.coord ? latLonToMeters(i.coord[0], i.coord[1], origin) : null, tags: i.tags })),
+        power: infra.power.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        parking: infra.parking.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        industrial: infra.industrial.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        airports: infra.airports.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        bridges: infra.bridges.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
+        rails: infra.rails.map(i => ({ pts: i.pts ? i.pts.map(c => latLonToMeters(c[0], c[1], origin)) : i.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: i.tags })),
     };
 
     return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes, infra: infraMeshes };
+}
+
+// --- Terrain / elevation support using OpenTopoData (SRTM)
+const VERT_SCALE = 0.5; // vertical exaggeration / scale for terrain and object heights
+let terrain = null; // THREE.Mesh
+let terrainGrid = null; // { nx, ny, lats[][], lons[][], heights[][], origin, dx, dy }
+
+async function fetchElevationPoints(points) {
+    // points: array of {lat, lon}
+    // use OpenTopoData API (srtm90m) in batches of 100
+    const out = [];
+    const batchSize = 100;
+    for (let i = 0; i < points.length; i += batchSize) {
+        const batch = points.slice(i, i + batchSize);
+        const locs = batch.map(p => `${p.lat},${p.lon}`).join('|');
+        const url = `https://api.opentopodata.org/v1/srtm90m`;
+        // POST with form-encoded body as the API example suggests (avoid long GET URLs)
+        const body = new URLSearchParams();
+        body.append('locations', locs);
+        body.append('interpolation', 'cubic');
+        const res = await fetch(url, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        if (!res.ok) throw new Error('Elevation fetch failed');
+        const data = await res.json();
+        for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
+    }
+    return out;
+}
+
+async function buildTerrainForBBox(bbox, gridSize = 64) {
+    // bbox = [south, west, north, east]
+    const [s, w, n, e] = bbox;
+    const nx = gridSize, ny = gridSize;
+    const lats = new Array(ny);
+    const lons = new Array(nx);
+    for (let j = 0; j < ny; j++) lats[j] = s + (n - s) * (j / (ny - 1));
+    for (let i = 0; i < nx; i++) lons[i] = w + (e - w) * (i / (nx - 1));
+    // prepare point list for elevation API
+    const points = [];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) points.push({ lat: lats[j], lon: lons[i] });
+    const heightsFlat = await fetchElevationPoints(points);
+
+    // build heights 2D array
+    const heights = new Array(ny);
+    let idx = 0;
+    for (let j = 0; j < ny; j++) {
+        heights[j] = new Array(nx);
+        for (let i = 0; i < nx; i++) { heights[j][i] = heightsFlat[idx++] || 0; }
+    }
+
+    // create geometry in local meters (origin = bbox center)
+    const origin = { lat: (s + n) / 2, lon: (w + e) / 2 };
+    // grid spacing in meters approximated by latLonToMeters delta
+    const p00 = latLonToMeters(lats[0], lons[0], origin);
+    const p10 = latLonToMeters(lats[0], lons[1], origin);
+    const p01 = latLonToMeters(lats[1], lons[0], origin);
+    const dx = Math.abs(p10.x - p00.x);
+    const dy = Math.abs(p01.y - p00.y);
+
+    // create PlaneGeometry with nx-1, ny-1 segments
+    const width = Math.abs(latLonToMeters(lats[0], lons[nx - 1], origin).x - p00.x);
+    const height = Math.abs(latLonToMeters(lats[ny - 1], lons[0], origin).y - p00.y);
+    const geom = new THREE.PlaneGeometry(width, height, nx - 1, ny - 1);
+    // PlaneGeometry is centered; we'll map heights to vertices
+    const vertices = geom.attributes.position;
+    // vertices order: (nx)*(ny) grid starting from -width/2,-height/2
+    let vi = 0;
+    for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+            const vx = vertices.getX(vi);
+            const vy = vertices.getY(vi);
+            const hj = j;
+            const hi = i;
+            const h = heights[hj][hi];
+            vertices.setZ(vi, h * VERT_SCALE);
+            vi++;
+        }
+    }
+    vertices.needsUpdate = true;
+    geom.computeVertexNormals();
+
+    // color by height
+    const colors = [];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const h = heights[j][i];
+        // simple gradient from green->brown->white
+        const t = Math.max(0, Math.min(1, (h + 50) / 1000));
+        const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
+        colors.push(r, g, b);
+    }
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    if (terrain) scene.remove(terrain);
+    terrain = new THREE.Mesh(geom, mat);
+    terrain.rotateX(-Math.PI / 2); // plane to X-Y
+    terrain.position.set(0, 0, 0);
+    scene.add(terrain);
+
+    terrainGrid = { nx, ny, lats, lons, heights, origin, dx, dy, width, height };
+}
+
+function getTerrainHeightAt(x, y) {
+    // x,y are in local meters relative to origin used when building terrain
+    if (!terrainGrid) return 0;
+    const { nx, ny, lats, lons, heights, origin, width, height } = terrainGrid;
+    // map x,y (centered plane) to i,j indices
+    const ix = ((x + width / 2) / width) * (nx - 1);
+    const jy = ((y + height / 2) / height) * (ny - 1);
+    const i0 = Math.floor(ix), j0 = Math.floor(jy);
+    const i1 = Math.min(nx - 1, i0 + 1), j1 = Math.min(ny - 1, j0 + 1);
+    const sx = ix - i0, sy = jy - j0;
+    const h00 = (heights[j0] && heights[j0][i0]) || 0;
+    const h10 = (heights[j0] && heights[j0][i1]) || 0;
+    const h01 = (heights[j1] && heights[j1][i0]) || 0;
+    const h11 = (heights[j1] && heights[j1][i1]) || 0;
+    const h0 = h00 * (1 - sx) + h10 * sx;
+    const h1 = h01 * (1 - sx) + h11 * sx;
+    const h = h0 * (1 - sy) + h1 * sy;
+    return h * VERT_SCALE; // same vertical scale used when building terrain
 }
 
 function initThree() {
@@ -313,7 +432,8 @@ function initThree() {
 
     // ground (plane in XY so Z is height)
     const ggeo = new THREE.PlaneGeometry(10000, 10000);
-    const gmat = new THREE.MeshLambertMaterial({ color: 0x999999 });
+    // darker ground so roads stand out
+    const gmat = new THREE.MeshLambertMaterial({ color: 0x444444 });
     const ground = new THREE.Mesh(ggeo, gmat);
     // leave unrotated so PlaneGeometry sits in X-Y plane (normal +Z)
     ground.position.z = 0;
@@ -380,10 +500,57 @@ function addBuildingsToScene(meshes) {
             mat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
         }
         const mesh = new THREE.Mesh(extrude, mat);
-        mesh.position.z = 0;
+        // align to terrain height at centroid if terrain available
+        const centroidX = m.pts.reduce((s, p) => s + p.x, 0) / Math.max(1, m.pts.length);
+        const centroidY = m.pts.reduce((s, p) => s + p.y, 0) / Math.max(1, m.pts.length);
+        const baseHeight = (typeof getTerrainHeightAt === 'function') ? getTerrainHeightAt(centroidX, centroidY) : 0;
+        mesh.position.z = baseHeight;
         scene.add(mesh);
         buildings.push(mesh);
+        // add label above building (use tag name if available)
+        const labelText = (m.tags && (m.tags.name || m.tags['addr:housename'])) ? (m.tags.name || m.tags['addr:housename']) : 'Tòa nhà';
+        const label = makeLabel(labelText, { font: '18px Arial', scale: 1.2 });
+        label.position.set(centroidX, centroidY, mesh.position.z + m.height + 6);
+        _recordLabel(label);
     }
+}
+
+// Helper: create a sprite label from text
+function makeLabel(text, options = {}) {
+    const font = options.font || '24px Arial';
+    const padding = 8;
+    const color = options.color || 'rgba(255,255,255,0.95)';
+    const bg = options.bg || 'rgba(0,0,0,0.6)';
+    // draw onto canvas
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.font = font;
+    const metrics = ctx.measureText(text);
+    const w = Math.ceil(metrics.width) + padding * 2;
+    const h = Math.ceil(parseInt(font, 10)) + padding * 2;
+    canvas.width = w; canvas.height = h;
+    // background
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    // text
+    ctx.fillStyle = color;
+    ctx.font = font;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, padding, h / 2);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: true, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    // scale down to reasonable world size
+    const scale = options.scale || 10;
+    sprite.scale.set(w / 10 * scale * 0.1, h / 10 * scale * 0.1, 1);
+    return sprite;
+}
+
+function _recordLabel(sprite) {
+    if (!scene.userData.labels) scene.userData.labels = [];
+    scene.add(sprite);
+    scene.userData.labels.push(sprite);
 }
 
 // New renderers for other types
@@ -392,13 +559,117 @@ function addRoadsToScene(roadMeshes) {
     if (!scene.userData.roads) scene.userData.roads = [];
     for (const r of scene.userData.roads) scene.remove(r);
     scene.userData.roads = [];
+    // helper: compute normals per segment
+    function segNormals(pts) {
+        const normals = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+            const a = pts[i], b = pts[i + 1];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const nx = -dy / len, ny = dx / len;
+            normals.push({ x: nx, y: ny });
+        }
+        return normals;
+    }
+
+    // helper: pick default lane count & lane width based on highway type
+    function guessLaneInfo(tags) {
+        let lanes = tags && tags.lanes ? parseInt(tags.lanes) : null;
+        const highway = tags && tags.highway ? tags.highway : '';
+        if (!lanes) {
+            if (highway === 'motorway') lanes = 4;
+            else if (highway === 'trunk') lanes = 4;
+            else if (highway === 'primary') lanes = 2;
+            else if (highway === 'secondary') lanes = 2;
+            else if (highway === 'tertiary') lanes = 2;
+            else if (highway === 'residential' || highway === 'unclassified' || highway === 'service') lanes = 2;
+            else lanes = 1;
+        }
+        // lane width defaults
+        let laneWidth = 3.0;
+        if (highway === 'motorway') laneWidth = 3.5;
+        if (highway === 'cycleway' || highway === 'footway' || highway === 'path') laneWidth = 1.5;
+        return { lanes, laneWidth };
+    }
+
     for (const r of roadMeshes) {
-        const pts = r.pts.map(p => new THREE.Vector3(p.x, p.y, 1));
-        const geom = new THREE.BufferGeometry().setFromPoints(pts);
-        const mat = new THREE.LineBasicMaterial({ color: 0x333333 });
-        const line = new THREE.Line(geom, mat);
-        scene.add(line);
-        scene.userData.roads.push(line);
+        if (!r.pts || r.pts.length < 2) continue;
+        const tags = r.tags || {};
+        const pts = r.pts.map(p => ({ x: p.x, y: p.y }));
+        const normals = segNormals(pts);
+        const info = guessLaneInfo(tags);
+        const totalWidth = info.lanes * info.laneWidth;
+        const half = totalWidth / 2;
+
+        // choose material color by surface
+        const surface = (tags.surface || '').toLowerCase();
+        const isConcrete = /concrete|paving/.test(surface);
+        const isAsphalt = /asphalt|bitumen|tarmac/.test(surface) || surface === '';
+        const roadColor = isConcrete ? 0xcccccc : 0x2f2f2f; // light gray for concrete, dark for asphalt
+        const roadMat = new THREE.MeshLambertMaterial({ color: roadColor });
+
+        // build left and right offset polylines (per segment)
+        const leftPts = [], rightPts = [];
+        for (let i = 0; i < pts.length; i++) {
+            let nx = 0, ny = 0;
+            if (i === 0) { nx = normals[0].x; ny = normals[0].y; }
+            else if (i === pts.length - 1) { nx = normals[normals.length - 1].x; ny = normals[normals.length - 1].y; }
+            else {
+                // average normals of segments before and after
+                const n1 = normals[i - 1], n2 = normals[i];
+                nx = (n1.x + n2.x) / 2; ny = (n1.y + n2.y) / 2;
+                const l = Math.sqrt(nx * nx + ny * ny) || 1; nx /= l; ny /= l;
+            }
+            leftPts.push(new THREE.Vector2(pts[i].x + nx * half, pts[i].y + ny * half));
+            rightPts.push(new THREE.Vector2(pts[i].x - nx * half, pts[i].y - ny * half));
+        }
+
+        // build shape by leftPts then reversed rightPts
+        const shape = new THREE.Shape();
+        leftPts.forEach((p, idx) => { if (idx === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y); });
+        for (let i = rightPts.length - 1; i >= 0; i--) shape.lineTo(rightPts[i].x, rightPts[i].y);
+
+        const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: false });
+        const mesh = new THREE.Mesh(geom, roadMat);
+    // compute average terrain height along centerline
+    let avgH = 0; let hhCount = 0;
+    for (const p of pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { avgH += h; hhCount++; } }
+    if (hhCount) avgH /= hhCount; else avgH = 0;
+    mesh.position.z = avgH + 0.02;
+        scene.add(mesh);
+        scene.userData.roads.push(mesh);
+
+        // centerline / lane separator: if lanes > 1, draw center dashed/yellow line for two-way, white for one-way
+        try {
+            const lanes = info.lanes || 1;
+            if (lanes > 1) {
+                const linePts = pts.map(p => new THREE.Vector3(p.x, p.y, avgH + 0.12));
+                const lineGeom = new THREE.BufferGeometry().setFromPoints(linePts);
+                // compute dashed material color
+                const isOneWay = tags.oneway === 'yes' || tags.oneway === '1' || tags.oneway === 'true';
+                const dashColor = isOneWay ? 0xffffff : 0xffcc00;
+                const lineMat = new THREE.LineDashedMaterial({ color: dashColor, dashSize: 4, gapSize: 4, linewidth: 1 });
+                const line = new THREE.Line(lineGeom, lineMat);
+                line.computeLineDistances();
+                scene.add(line);
+                scene.userData.roads.push(line);
+            }
+        } catch (e) {
+            // ignore
+        }
+        // draw dark border along edges for contrast
+        try {
+            const leftBorderPts = leftPts.map(p => new THREE.Vector3(p.x, p.y, 0.025));
+            const rightBorderPts = rightPts.map(p => new THREE.Vector3(p.x, p.y, 0.025));
+            const borderMat = new THREE.LineBasicMaterial({ color: 0x111111 });
+            // set border z to average height as well
+            const leftGeom = new THREE.BufferGeometry().setFromPoints(leftBorderPts.map(p=>new THREE.Vector3(p.x,p.y,avgH+0.025)));
+            const rightGeom = new THREE.BufferGeometry().setFromPoints(rightBorderPts.map(p=>new THREE.Vector3(p.x,p.y,avgH+0.025)));
+            const leftLine = new THREE.Line(leftGeom, borderMat);
+            const rightLine = new THREE.Line(rightGeom, borderMat);
+            scene.add(leftLine); scene.userData.roads.push(leftLine);
+            scene.add(rightLine); scene.userData.roads.push(rightLine);
+        } catch (e) { }
     }
 }
 
@@ -411,10 +682,15 @@ function addWaterToScene(waterMeshes) {
         if (w.pts.length >= 3) {
             const shape = new THREE.Shape();
             w.pts.forEach((p, i) => { if (i === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y); });
-            const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
-            const mat = new THREE.MeshLambertMaterial({ color: 0x4aa3df, transparent: true, opacity: 0.8 });
+            // place water slightly below ground to avoid z-fighting and make shorelines visible
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.4, bevelEnabled: false });
+            const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6, transparent: true, opacity: 0.85 });
             const mesh = new THREE.Mesh(geom, mat);
-            mesh.position.z = 0;
+            // compute average terrain height under lake and place water slightly above lowest shoreline (or slightly below to avoid z-fighting)
+            let sum = 0, cnt = 0;
+            for (const p of w.pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { sum += h; cnt++; } }
+            const avg = cnt ? (sum / cnt) : 0;
+            mesh.position.z = avg - 0.1;
             scene.add(mesh);
             scene.userData.water.push(mesh);
         } else if (w.pts.length > 1) {
@@ -423,9 +699,14 @@ function addWaterToScene(waterMeshes) {
             const points = w.pts.map(p => new THREE.Vector3(p.x, p.y, 0));
             // simple TubeGeometry using a CatmullRomCurve3
             const curve = new THREE.CatmullRomCurve3(points);
-            const tubeGeom = new THREE.TubeGeometry(curve, Math.max(2, points.length*3), 2, 8, false);
-            const mat = new THREE.MeshLambertMaterial({ color: 0x4aa3df });
+            const tubeGeom = new THREE.TubeGeometry(curve, Math.max(2, points.length * 3), 1.2, 8, false);
+            const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6 });
             const mesh = new THREE.Mesh(tubeGeom, mat);
+            // lower river slightly relative to terrain along its centerline
+            let sumr = 0, cntr = 0;
+            for (const p of w.pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { sumr += h; cntr++; } }
+            const avgr = cntr ? (sumr / cntr) : 0;
+            mesh.position.z = avgr - 0.05;
             scene.add(mesh);
             scene.userData.water.push(mesh);
         }
@@ -438,11 +719,11 @@ function addHillsToScene(hillMeshes) {
     scene.userData.hills = [];
     for (const h of hillMeshes) {
         // approximate hill by placing a cone at centroid
-        const xs = h.pts.map(p=>p.x), ys = h.pts.map(p=>p.y);
-        const cx = (Math.min(...xs) + Math.max(...xs))/2;
-        const cy = (Math.min(...ys) + Math.max(...ys))/2;
+        const xs = h.pts.map(p => p.x), ys = h.pts.map(p => p.y);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
         const geom = new THREE.ConeGeometry(20, 40, 12);
-        const mat = new THREE.MeshLambertMaterial({ color: 0x886644, transparent:true, opacity:0.9 });
+        const mat = new THREE.MeshLambertMaterial({ color: 0x886644, transparent: true, opacity: 0.9 });
         const mesh = new THREE.Mesh(geom, mat);
         mesh.position.set(cx, cy, 10);
         scene.add(mesh);
@@ -464,6 +745,12 @@ function addParksToScene(parkMeshes) {
         mesh.position.z = 0;
         scene.add(mesh);
         scene.userData.parks.push(mesh);
+        // label
+        const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
+        const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+        const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Công viên', { font: '16px Arial', scale: 1.0 });
+        label.position.set(cx, cy, 6);
+        _recordLabel(label);
     }
 }
 
@@ -478,6 +765,10 @@ function addPeaksToScene(points) {
         mesh.position.set(p.pos.x, p.pos.y, 10);
         scene.add(mesh);
         scene.userData.peaks.push(mesh);
+        // label
+        const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Đỉnh', { font: '14px Arial', scale: 1.0 });
+        label.position.set(p.pos.x, p.pos.y, 30);
+        _recordLabel(label);
     }
 }
 
@@ -501,17 +792,29 @@ function addInfraToScene(infra) {
         for (const h of infra.hospitals) {
             if (h.pos) {
                 const m = new THREE.Mesh(sphereGeom, hospitalMat);
-                m.position.set(h.pos.x, h.pos.y, 2);
+                const hh = getTerrainHeightAt(h.pos.x, h.pos.y) || 0;
+                m.position.set(h.pos.x, h.pos.y, hh + 2);
                 m.userData = { type: 'hospital', tags: h.tags };
                 addRecorded(m);
+                const label = makeLabel(h.tags && h.tags.name ? h.tags.name : 'Bệnh viện', { font: '14px Arial', scale: 1.0 });
+                label.position.set(h.pos.x, h.pos.y, hh + 6);
+                _recordLabel(label);
             } else if (h.pts && h.pts.length) {
                 // extrude area
                 const shape = new THREE.Shape(h.pts.map(p => new THREE.Vector2(p.x, p.y)));
                 const geom = new THREE.ExtrudeGeometry(shape, { depth: 4, bevelEnabled: false });
                 const mat = new THREE.MeshStandardMaterial({ color: 0xff6666, opacity: 0.9, transparent: true });
                 const mesh = new THREE.Mesh(geom, mat);
-                mesh.position.z = 0.1;
+                // position polys to terrain average
+                let sumh=0,c=0; for(const p of h.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh+=hh;c++;}}
+                const base = c? (sumh/c):0;
+                mesh.position.z = base;
                 addRecorded(mesh);
+                const xs = h.pts.map(p => p.x), ys = h.pts.map(p => p.y);
+                const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+                const label = makeLabel(h.tags && h.tags.name ? h.tags.name : 'Bệnh viện', { font: '14px Arial', scale: 1.0 });
+                label.position.set(cx, cy, base + 8);
+                _recordLabel(label);
             }
         }
     }
@@ -519,17 +822,28 @@ function addInfraToScene(infra) {
     if (infra.schools) {
         for (const s of infra.schools) {
             if (s.pos) {
+                const sh = getTerrainHeightAt(s.pos.x, s.pos.y) || 0;
                 const m = new THREE.Mesh(sphereGeom, schoolMat);
-                m.position.set(s.pos.x, s.pos.y, 2);
+                m.position.set(s.pos.x, s.pos.y, sh + 2);
                 m.userData = { type: 'school', tags: s.tags };
                 addRecorded(m);
+                const label = makeLabel(s.tags && s.tags.name ? s.tags.name : 'Trường', { font: '14px Arial', scale: 1.0 });
+                label.position.set(s.pos.x, s.pos.y, sh + 6);
+                _recordLabel(label);
             } else if (s.pts && s.pts.length) {
                 const shape = new THREE.Shape(s.pts.map(p => new THREE.Vector2(p.x, p.y)));
                 const geom = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false });
                 const mat = new THREE.MeshStandardMaterial({ color: 0x6666ff, opacity: 0.85, transparent: true });
                 const mesh = new THREE.Mesh(geom, mat);
-                mesh.position.z = 0.1;
+                let sumh2=0,c2=0; for(const p of s.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh2+=hh;c2++;}}
+                const base2 = c2 ? (sumh2/c2) : 0;
+                mesh.position.z = base2;
                 addRecorded(mesh);
+                const xs = s.pts.map(p => p.x), ys = s.pts.map(p => p.y);
+                const cx = xs.reduce((t, v) => t + v, 0) / xs.length; const cy = ys.reduce((t, v) => t + v, 0) / ys.length;
+                const label = makeLabel(s.tags && s.tags.name ? s.tags.name : 'Trường', { font: '14px Arial', scale: 1.0 });
+                label.position.set(cx, cy, base2 + 6);
+                _recordLabel(label);
             }
         }
     }
@@ -540,10 +854,14 @@ function addInfraToScene(infra) {
         const busGeom = new THREE.SphereGeometry(0.8, 6, 6);
         for (const b of infra.busStops) {
             if (!b.pos) continue;
+            const bh = getTerrainHeightAt(b.pos.x, b.pos.y) || 0;
             const m = new THREE.Mesh(busGeom, busMat);
-            m.position.set(b.pos.x, b.pos.y, 1.5);
+            m.position.set(b.pos.x, b.pos.y, bh + 1.5);
             m.userData = { type: 'bus', tags: b.tags };
             addRecorded(m);
+            const label = makeLabel(b.tags && b.tags.name ? b.tags.name : 'Trạm bus', { font: '12px Arial', scale: 0.9 });
+            label.position.set(b.pos.x, b.pos.y, bh + 4);
+            _recordLabel(label);
         }
     }
 
@@ -558,6 +876,11 @@ function addInfraToScene(infra) {
             const mesh = new THREE.Mesh(geom, parkingMat);
             mesh.position.z = 0.05;
             addRecorded(mesh);
+            const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
+            const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Bãi đậu xe', { font: '12px Arial', scale: 0.9 });
+            label.position.set(cx, cy, 4);
+            _recordLabel(label);
         }
     }
     if (infra.industrial) {
@@ -568,6 +891,11 @@ function addInfraToScene(infra) {
             const mesh = new THREE.Mesh(geom, areaMat);
             mesh.position.z = 0.1;
             addRecorded(mesh);
+            const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
+            const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Khu CN', { font: '12px Arial', scale: 0.9 });
+            label.position.set(cx, cy, 8);
+            _recordLabel(label);
         }
     }
     if (infra.airports) {
@@ -578,6 +906,11 @@ function addInfraToScene(infra) {
             const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x222222, opacity: 0.6, transparent: true }));
             mesh.position.z = 0.05;
             addRecorded(mesh);
+            const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
+            const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Sân bay', { font: '12px Arial', scale: 0.9 });
+            label.position.set(cx, cy, 6);
+            _recordLabel(label);
         }
     }
 
@@ -633,6 +966,12 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
     const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
     try {
         showLoader(true);
+        // build terrain for the selected bbox first so objects can align to it
+        try {
+            await buildTerrainForBBox(bbox, 48);
+        } catch (terrErr) {
+            console.warn('Terrain fetch failed, continuing without terrain', terrErr);
+        }
         const osm = await fetchOSM(bbox);
         const parsed = parseOSM(osm, center);
         // render based on selections
