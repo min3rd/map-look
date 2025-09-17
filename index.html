@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Map Look - Scan & 3D Explore</title>
+    <!-- Tailwind CDN (Play CDN for quick prototype) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <style>
+        html,
+        body,
+        #map {
+            height: 100%;
+        }
+
+        #container {
+            height: 100vh;
+            display: flex;
+            flex-direction: row
+        }
+
+        #map {
+            width: 40%;
+        }
+
+        #viewer {
+            width: 60%;
+            background: #111;
+            position: relative
+        }
+
+        .overlay-btn {
+            position: absolute;
+            z-index: 1000
+        }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+
+<body class="bg-gray-900 text-white">
+    <div id="container">
+        <div id="map" class="p-2"></div>
+        <div id="viewer">
+            <div id="three-root" style="width:100%;height:100%"></div>
+            <div id="loader" class="hidden absolute inset-0 flex items-center justify-center bg-black/50 z-50">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <div class="text-white">Đang quét khu vực...</div>
+                </div>
+            </div>
+            <div class="absolute top-2 left-2 bg-black/50 p-2 rounded">
+                <div class="mb-2">
+                    <button id="scanBtn" class="px-3 py-1 bg-blue-600 rounded">Quét khu vực</button>
+                    <button id="enter3D" class="px-3 py-1 bg-green-600 rounded ml-2">Vào 3D</button>
+                </div>
+                <div id="controlsPanel" class="text-sm">
+                    <div class="font-semibold text-gray-200 mb-1">Hiển thị trên 3D</div>
+                    <label class="block"><input type="checkbox" id="cb_building" checked> Tòa nhà</label>
+                    <label class="block"><input type="checkbox" id="cb_road" checked> Đường</label>
+                    <label class="block"><input type="checkbox" id="cb_lake" checked> Hồ</label>
+                    <label class="block"><input type="checkbox" id="cb_river" checked> Sông</label>
+                    <label class="block"><input type="checkbox" id="cb_mountain" checked> Núi</label>
+                    <label class="block"><input type="checkbox" id="cb_park" checked> Công viên</label>
+                </div>
+            </div>
+            <div class="absolute bottom-2 left-2 text-sm text-gray-300 p-2 bg-black/40 rounded">Giữ <strong>Shift</strong> và nhấp-drag trên bản đồ để
+                chọn vùng; kéo thả bình thường để di chuyển/zoom bản đồ. Sau đó nhấn "Quét khu vực"</div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <!-- Three.js (module build) -->
+</body>
+<script type="module" src="./src/main.js"></script>
+
+</html>
