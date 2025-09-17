@@ -74,6 +74,45 @@ async function fetchOSM(bbox) {
         // highway ways
         wanted.push('way["highway"]');
     }
+    // infrastructure
+    if (document.getElementById('cb_hospital').checked) {
+        wanted.push('node["amenity"="hospital"]');
+        wanted.push('way["amenity"="hospital"]');
+        wanted.push('relation["amenity"="hospital"]');
+    }
+    if (document.getElementById('cb_school').checked) {
+        wanted.push('node["amenity"="school"]');
+        wanted.push('way["amenity"="school"]');
+        wanted.push('relation["amenity"="school"]');
+    }
+    if (document.getElementById('cb_rail').checked) {
+        wanted.push('way["railway"]');
+        wanted.push('relation["railway"]');
+    }
+    if (document.getElementById('cb_bus').checked) {
+        wanted.push('node["highway"="bus_stop"]');
+    }
+    if (document.getElementById('cb_power').checked) {
+        wanted.push('way["power"]');
+        wanted.push('node["power"]');
+    }
+    if (document.getElementById('cb_parking').checked) {
+        wanted.push('way["amenity"="parking"]');
+        wanted.push('relation["amenity"="parking"]');
+    }
+    if (document.getElementById('cb_industrial').checked) {
+        wanted.push('way["landuse"="industrial"]');
+        wanted.push('relation["landuse"="industrial"]');
+    }
+    if (document.getElementById('cb_airport').checked) {
+        wanted.push('way["aeroway"]');
+        wanted.push('node["aeroway"="aerodrome"]');
+        wanted.push('relation["aeroway"]');
+    }
+    if (document.getElementById('cb_bridge').checked) {
+        wanted.push('way["bridge"]');
+        wanted.push('relation["bridge"]');
+    }
     if (document.getElementById('cb_lake').checked || document.getElementById('cb_river').checked) {
         // water features
         wanted.push('way["natural"="water"]');
@@ -128,6 +167,7 @@ function parseOSM(osm, bboxCenter) {
     const parks = [];
     const hills = [];
     const buildings = [];
+    const infra = { hospitals: [], schools: [], busStops: [], power: [], parking: [], industrial: [], airports: [], bridges: [], rails: [] };
     const peaks = [];
 
     // first pass: index nodes and ways
@@ -144,12 +184,28 @@ function parseOSM(osm, bboxCenter) {
         if (tags.building) {
             const height = tags.height ? parseFloat(tags.height) : (tags['building:levels'] ? parseFloat(tags['building:levels']) * 3 : 10);
             buildings.push({ coords, height, tags });
+        } else if (tags.amenity === 'hospital') {
+            infra.hospitals.push({ coords, tags });
+        } else if (tags.amenity === 'school') {
+            infra.schools.push({ coords, tags });
         } else if (tags.highway) {
             roads.push({ coords, tags });
+        } else if (tags.railway) {
+            infra.rails.push({ coords, tags });
         } else if (tags.natural === 'hill') {
             hills.push({ coords, tags });
         } else if (tags.natural === 'water' || tags.water === 'lake' || tags.waterway === 'river' || tags['waterway']) {
             waters.push({ coords, tags });
+        } else if (tags.amenity === 'parking') {
+            infra.parking.push({ coords, tags });
+        } else if (tags.landuse === 'industrial') {
+            infra.industrial.push({ coords, tags });
+        } else if (tags.aeroway) {
+            infra.airports.push({ coords, tags });
+        } else if (tags.bridge) {
+            infra.bridges.push({ coords, tags });
+        } else if (tags.power) {
+            infra.power.push({ coords, tags });
         } else if (tags.leisure === 'park' || tags.landuse === 'park') {
             parks.push({ coords, tags });
         }
@@ -176,6 +232,11 @@ function parseOSM(osm, bboxCenter) {
                 else if (tags.leisure === 'park') parks.push({ coords: stitched, tags });
                 else if (tags.building) buildings.push({ coords: stitched, height: tags.height ? parseFloat(tags.height) : 10, tags });
                 else if (tags.natural === 'hill') hills.push({ coords: stitched, tags });
+                else if (tags.amenity === 'hospital') infra.hospitals.push({ coords: stitched, tags });
+                else if (tags.amenity === 'school') infra.schools.push({ coords: stitched, tags });
+                else if (tags.amenity === 'parking') infra.parking.push({ coords: stitched, tags });
+                else if (tags.landuse === 'industrial') infra.industrial.push({ coords: stitched, tags });
+                else if (tags.aeroway) infra.airports.push({ coords: stitched, tags });
             }
         }
     }
@@ -189,6 +250,17 @@ function parseOSM(osm, bboxCenter) {
             }
         }
     }
+    // also capture infra nodes (hospital, school, bus_stop, power, aerodrome, parking)
+    for (const el of osm.elements) {
+        if (el.type !== 'node') continue;
+        const tags = el.tags || {};
+        if (tags.amenity === 'hospital') infra.hospitals.push({ coord: [el.lat, el.lon], tags });
+        else if (tags.amenity === 'school') infra.schools.push({ coord: [el.lat, el.lon], tags });
+        else if (tags.highway === 'bus_stop') infra.busStops.push({ coord: [el.lat, el.lon], tags });
+        else if (tags.power) infra.power.push({ coord: [el.lat, el.lon], tags });
+        else if (tags.aeroway === 'aerodrome' || tags.aeroway) infra.airports.push({ coord: [el.lat, el.lon], tags });
+        else if (tags.amenity === 'parking') infra.parking.push({ coord: [el.lat, el.lon], tags });
+    }
     // convert to three meshes
     const origin = { lat: bboxCenter[0], lon: bboxCenter[1] };
     const buildingMeshes = buildings.map(w => ({ pts: w.coords.map(c => latLonToMeters(c[0], c[1], origin)), height: w.height, tags: w.tags }));
@@ -197,7 +269,20 @@ function parseOSM(osm, bboxCenter) {
     const parkMeshes = parks.map(p => ({ pts: p.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: p.tags }));
     const peakPoints = peaks.map(p => ({ pos: latLonToMeters(p.coord[0], p.coord[1], origin), tags: p.tags }));
     const hillMeshes = hills.map(h => ({ pts: h.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: h.tags }));
-    return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes };
+    // convert infra
+    const infraMeshes = {
+        hospitals: infra.hospitals.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        schools: infra.schools.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        busStops: infra.busStops.map(i=>({ pos: i.coord ? latLonToMeters(i.coord[0], i.coord[1], origin) : null, tags: i.tags })),
+        power: infra.power.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        parking: infra.parking.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        industrial: infra.industrial.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        airports: infra.airports.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        bridges: infra.bridges.map(i=>({ pts: i.coords ? i.coords.map(c=>latLonToMeters(c[0],c[1],origin)) : [], tags: i.tags })),
+        rails: infra.rails.map(i=>({ pts: i.pts ? i.pts.map(c=>latLonToMeters(c[0],c[1],origin)) : i.coords.map(c=>latLonToMeters(c[0],c[1],origin)), tags: i.tags })),
+    };
+
+    return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes, infra: infraMeshes };
 }
 
 function initThree() {
@@ -396,45 +481,145 @@ function addPeaksToScene(points) {
     }
 }
 
+function addInfraToScene(infra) {
+    // manage infra group on scene.userData so we can remove them easily
+    if (!scene.userData.infra) scene.userData.infra = [];
+    else {
+        for (const o of scene.userData.infra) scene.remove(o);
+        scene.userData.infra = [];
+    }
+
+    // helper to add and record
+    const addRecorded = (obj) => { scene.add(obj); scene.userData.infra.push(obj); };
+
+    // simple sphere markers for hospitals and schools (points)
+    const sphereGeom = new THREE.SphereGeometry(1.2, 8, 6);
+    const hospitalMat = new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.1, roughness: 0.8 });
+    const schoolMat = new THREE.MeshStandardMaterial({ color: 0x4444ff, metalness: 0.1, roughness: 0.8 });
+
+    if (infra.hospitals) {
+        for (const h of infra.hospitals) {
+            if (h.pos) {
+                const m = new THREE.Mesh(sphereGeom, hospitalMat);
+                m.position.set(h.pos.x, h.pos.y, 2);
+                m.userData = { type: 'hospital', tags: h.tags };
+                addRecorded(m);
+            } else if (h.pts && h.pts.length) {
+                // extrude area
+                const shape = new THREE.Shape(h.pts.map(p => new THREE.Vector2(p.x, p.y)));
+                const geom = new THREE.ExtrudeGeometry(shape, { depth: 4, bevelEnabled: false });
+                const mat = new THREE.MeshStandardMaterial({ color: 0xff6666, opacity: 0.9, transparent: true });
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.position.z = 0.1;
+                addRecorded(mesh);
+            }
+        }
+    }
+
+    if (infra.schools) {
+        for (const s of infra.schools) {
+            if (s.pos) {
+                const m = new THREE.Mesh(sphereGeom, schoolMat);
+                m.position.set(s.pos.x, s.pos.y, 2);
+                m.userData = { type: 'school', tags: s.tags };
+                addRecorded(m);
+            } else if (s.pts && s.pts.length) {
+                const shape = new THREE.Shape(s.pts.map(p => new THREE.Vector2(p.x, p.y)));
+                const geom = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false });
+                const mat = new THREE.MeshStandardMaterial({ color: 0x6666ff, opacity: 0.85, transparent: true });
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.position.z = 0.1;
+                addRecorded(mesh);
+            }
+        }
+    }
+
+    // bus stops as small spheres
+    if (infra.busStops) {
+        const busMat = new THREE.MeshStandardMaterial({ color: 0xffff44 });
+        const busGeom = new THREE.SphereGeometry(0.8, 6, 6);
+        for (const b of infra.busStops) {
+            if (!b.pos) continue;
+            const m = new THREE.Mesh(busGeom, busMat);
+            m.position.set(b.pos.x, b.pos.y, 1.5);
+            m.userData = { type: 'bus', tags: b.tags };
+            addRecorded(m);
+        }
+    }
+
+    // parking, industrial, airports -> extruded areas
+    const areaMat = new THREE.MeshStandardMaterial({ color: 0x999999, opacity: 0.7, transparent: true });
+    const parkingMat = new THREE.MeshStandardMaterial({ color: 0x555555, opacity: 0.7, transparent: true });
+    if (infra.parking) {
+        for (const p of infra.parking) {
+            if (!p.pts || !p.pts.length) continue;
+            const shape = new THREE.Shape(p.pts.map(pt => new THREE.Vector2(pt.x, pt.y)));
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
+            const mesh = new THREE.Mesh(geom, parkingMat);
+            mesh.position.z = 0.05;
+            addRecorded(mesh);
+        }
+    }
+    if (infra.industrial) {
+        for (const p of infra.industrial) {
+            if (!p.pts || !p.pts.length) continue;
+            const shape = new THREE.Shape(p.pts.map(pt => new THREE.Vector2(pt.x, pt.y)));
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 6, bevelEnabled: false });
+            const mesh = new THREE.Mesh(geom, areaMat);
+            mesh.position.z = 0.1;
+            addRecorded(mesh);
+        }
+    }
+    if (infra.airports) {
+        for (const p of infra.airports) {
+            if (!p.pts || !p.pts.length) continue;
+            const shape = new THREE.Shape(p.pts.map(pt => new THREE.Vector2(pt.x, pt.y)));
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: false });
+            const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x222222, opacity: 0.6, transparent: true }));
+            mesh.position.z = 0.05;
+            addRecorded(mesh);
+        }
+    }
+
+    // bridges, rails, power -> lines
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x663300 });
+    if (infra.bridges) {
+        for (const b of infra.bridges) {
+            if (!b.pts || b.pts.length < 2) continue;
+            const pts = b.pts.map(p => new THREE.Vector3(p.x, p.y, 0.5));
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            const line = new THREE.Line(geom, lineMat);
+            addRecorded(line);
+        }
+    }
+    if (infra.rails) {
+        const railMat = new THREE.LineBasicMaterial({ color: 0x111111, linewidth: 2 });
+        for (const r of infra.rails) {
+            if (!r.pts || r.pts.length < 2) continue;
+            const pts = r.pts.map(p => new THREE.Vector3(p.x, p.y, 0.5));
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            const line = new THREE.Line(geom, railMat);
+            addRecorded(line);
+        }
+    }
+    if (infra.power) {
+        const powerMat = new THREE.LineBasicMaterial({ color: 0xffaa00 });
+        for (const p of infra.power) {
+            if (!p.pts || p.pts.length < 2) continue;
+            const pts = p.pts.map(pt => new THREE.Vector3(pt.x, pt.y, 1.0));
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            const line = new THREE.Line(geom, powerMat);
+            addRecorded(line);
+        }
+    }
+}
+
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
     renderer.render(scene, camera);
 }
 
-// pointer-lock flight controls (simple)
-class FlightControls {
-    constructor(camera, dom) {
-        this.camera = camera; this.dom = dom; this.velocity = new THREE.Vector3(); this.enabled = false;
-        this.move = { f: 0, b: 0, l: 0, r: 0, u: 0, d: 0 };
-        this.speed = 200;
-        this.pitch = 0; this.yaw = 0;
-        dom.addEventListener('click', () => { dom.requestPointerLock(); });
-        document.addEventListener('pointerlockchange', () => { this.enabled = document.pointerLockElement === dom; });
-        document.addEventListener('mousemove', (e) => { if (!this.enabled) return; this.yaw -= e.movementX * 0.002; this.pitch -= e.movementY * 0.002; this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch)); this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ')); });
-        window.addEventListener('keydown', (e) => { if (e.key === 'w') this.move.f = 1; if (e.key === 's') this.move.b = 1; if (e.key === 'a') this.move.l = 1; if (e.key === 'd') this.move.r = 1; if (e.key === ' ') this.move.u = 1; if (e.key === 'Shift') this.move.d = 1; });
-        window.addEventListener('keyup', (e) => { if (e.key === 'w') this.move.f = 0; if (e.key === 's') this.move.b = 0; if (e.key === 'a') this.move.l = 0; if (e.key === 'd') this.move.r = 0; if (e.key === ' ') this.move.u = 0; if (e.key === 'Shift') this.move.d = 0; });
-    }
-    update(dt) {
-        if (!this.enabled) return;
-        const dir = new THREE.Vector3();
-        this.camera.getWorldDirection(dir);
-        const right = new THREE.Vector3(); this.camera.getWorldDirection(right); right.cross(this.camera.up);
-        const up = new THREE.Vector3(0, 0, 1);
-        const v = new THREE.Vector3();
-        if (this.move.f) v.add(dir);
-        if (this.move.b) v.sub(dir);
-        if (this.move.r) v.add(right);
-        if (this.move.l) v.sub(right);
-        if (this.move.u) v.add(up);
-        if (this.move.d) v.sub(up);
-        v.normalize();
-        v.multiplyScalar(this.speed * dt);
-        this.camera.position.add(v);
-    }
-}
-
-let flightControls;
 let buildingTexture = null;
 
 // Wire UI
@@ -456,7 +641,23 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         if (parsed.water && (document.getElementById('cb_lake').checked || document.getElementById('cb_river').checked)) addWaterToScene(parsed.water);
         if (parsed.parks && document.getElementById('cb_park').checked) addParksToScene(parsed.parks);
         if (parsed.peaks && document.getElementById('cb_mountain').checked) addPeaksToScene(parsed.peaks);
-    if (parsed.hills && document.getElementById('cb_mountain').checked) addHillsToScene(parsed.hills);
+        if (parsed.hills && document.getElementById('cb_mountain').checked) addHillsToScene(parsed.hills);
+
+        // infra toggles
+        if (parsed.infra) {
+            const infraToAdd = { hospitals: [], schools: [], busStops: [], power: [], parking: [], industrial: [], airports: [], bridges: [], rails: [] };
+            if (document.getElementById('cb_hospital') && document.getElementById('cb_hospital').checked) infraToAdd.hospitals = parsed.infra.hospitals || [];
+            if (document.getElementById('cb_school') && document.getElementById('cb_school').checked) infraToAdd.schools = parsed.infra.schools || [];
+            if (document.getElementById('cb_bus') && document.getElementById('cb_bus').checked) infraToAdd.busStops = parsed.infra.busStops || [];
+            if (document.getElementById('cb_rail') && document.getElementById('cb_rail').checked) infraToAdd.rails = parsed.infra.rails || [];
+            if (document.getElementById('cb_power') && document.getElementById('cb_power').checked) infraToAdd.power = parsed.infra.power || [];
+            if (document.getElementById('cb_parking') && document.getElementById('cb_parking').checked) infraToAdd.parking = parsed.infra.parking || [];
+            if (document.getElementById('cb_industrial') && document.getElementById('cb_industrial').checked) infraToAdd.industrial = parsed.infra.industrial || [];
+            if (document.getElementById('cb_airport') && document.getElementById('cb_airport').checked) infraToAdd.airports = parsed.infra.airports || [];
+            if (document.getElementById('cb_bridge') && document.getElementById('cb_bridge').checked) infraToAdd.bridges = parsed.infra.bridges || [];
+            addInfraToScene(infraToAdd);
+        }
+
         // if texture just loaded after buildings were created, ensure materials updated
         if (buildingTexture) {
             // clone texture per building so repeat changes don't affect others
@@ -466,34 +667,27 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
                 b.material.needsUpdate = true;
             }
         }
-        showLoader(false);
     } catch (err) {
+        console.error(err);
+        alert('Lỗi khi lấy dữ liệu OSM');
+    } finally {
         showLoader(false);
     }
 });
 
 // enter 3D: center camera on selection
-document.getElementById('enter3D').addEventListener('click', () => {
-    if (!rect) { alert('Chọn vùng trước khi vào 3D'); return; }
-    const b = rect.getBounds();
-    const center = b.getCenter();
-    const origin = { lat: center.lat, lon: center.lng };
-    // move camera near center
-    const m = latLonToMeters(center.lat, center.lng, origin);
-    camera.position.set(m.x, m.y - 200, 200);
-    controls.target.set(m.x, m.y, 0);
-    controls.update();
-    // attach flight controls
-    if (!flightControls) flightControls = new FlightControls(camera, renderer.domElement);
-    // start update loop for flight
-    let last = performance.now();
-    function floop() {
-        const now = performance.now();
-        const dt = (now - last) / 1000; last = now;
-        flightControls.update(dt);
-        requestAnimationFrame(floop);
-    }
-    floop();
-});
+// (enter3D removed - flight/ptr-lock controls disabled per user request)
+
+// Check all / Uncheck all behaviors for controlsPanel
+const checkAllBtn = document.getElementById('checkAll');
+const uncheckAllBtn = document.getElementById('uncheckAll');
+function setAllControls(yes) {
+    const panel = document.getElementById('controlsPanel');
+    if (!panel) return;
+    const inputs = panel.querySelectorAll('input[type=checkbox]');
+    inputs.forEach(inp => { inp.checked = yes; });
+}
+if (checkAllBtn) checkAllBtn.addEventListener('click', () => setAllControls(true));
+if (uncheckAllBtn) uncheckAllBtn.addEventListener('click', () => setAllControls(false));
 
 export { };
