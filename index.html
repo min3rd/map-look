@@ -25,44 +25,53 @@
             }
             </script>
     <style>
-        html,
-        body,
-        #app {
+        html, body, #app {
             height: 100%;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 8px;
         }
     </style>
 </head>
 
-<body class="bg-gray-100">
-    <div id="app" class="flex h-full">
-        <div id="left" class="w-1/2 p-2">
-            <div class="bg-white rounded shadow h-full flex flex-col">
-                <div class="p-2 border-b">
-                    <h1 class="text-lg font-semibold">Map Look - chọn khu vực</h1>
-                    <p class="text-sm text-gray-600">Dùng công cụ vẽ để quét 1 khu vực trên bản đồ</p>
+<body class="bg-gradient-to-br from-blue-50 to-gray-100 min-h-screen">
+    <div id="app" class="flex flex-col md:flex-row h-full min-h-screen">
+        <div id="left" class="md:w-1/2 w-full p-2">
+            <div class="bg-white rounded-2xl shadow-lg h-full flex flex-col border border-gray-200">
+                <div class="p-4 border-b flex flex-col gap-1">
+                    <h1 class="text-xl font-bold text-blue-700">Map Look - chọn khu vực</h1>
+                    <p class="text-sm text-gray-500">Dùng công cụ vẽ để quét 1 khu vực trên bản đồ</p>
                 </div>
-                <div id="map" class="flex-1"></div>
-                <div class="p-2 border-t flex space-x-2">
-                    <button id="btn-fetch" class="px-3 py-1 bg-blue-600 text-white rounded">Fetch & Build 3D</button>
-                    <button id="btn-clear" class="px-3 py-1 bg-gray-200 rounded">Clear</button>
-                    <div id="status" class="text-sm text-gray-600 self-center"></div>
+                <div id="map" class="flex-1 rounded-lg overflow-hidden"></div>
+                <div class="p-4 border-t flex flex-wrap gap-2 items-center">
+                    <div class="flex gap-2">
+                        <button id="btn-fetch" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 transition text-white rounded-lg shadow font-medium">Fetch & Build 3D</button>
+                        <button id="btn-image-mode" class="px-4 py-2 bg-green-600 hover:bg-green-700 transition text-white rounded-lg shadow font-medium">Dựng 3D từ màu bản đồ</button>
+                        <button id="btn-clear" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 transition text-gray-700 rounded-lg shadow font-medium">Clear</button>
+                    </div>
+                    <div id="status" class="text-sm text-gray-500 ml-2"></div>
                 </div>
             </div>
         </div>
-        <div id="right" class="w-1/2 p-2">
-            <div class="bg-white rounded shadow h-full flex flex-col">
-                <div class="p-2 border-b">
-                    <h2 class="text-lg font-semibold">3D Viewer</h2>
-                    <p class="text-sm text-gray-600">Hiển thị mô hình 3D sinh ra từ dữ liệu OSM</p>
+        <div id="right" class="md:w-1/2 w-full p-2">
+            <div class="bg-white rounded-2xl shadow-lg h-full flex flex-col border border-gray-200">
+                <div class="p-4 border-b flex flex-col gap-1">
+                    <h2 class="text-xl font-bold text-blue-700">3D Viewer</h2>
+                    <p class="text-sm text-gray-500">Hiển thị mô hình 3D sinh ra từ dữ liệu OSM</p>
                 </div>
-                <div id="viewer" class="flex-1 bg-black"></div>
-                <div class="p-2 border-t text-sm text-gray-600">
-                    <div>Controls: Drag to rotate, scroll to zoom</div>
+                <div id="viewer" class="flex-1 bg-black rounded-lg overflow-hidden"></div>
+                <div class="p-4 border-t text-sm text-gray-500">
+                    <div>Controls: <span class="font-medium text-gray-700">Drag</span> để xoay, <span class="font-medium text-gray-700">scroll</span> để zoom</div>
                 </div>
             </div>
         </div>
     </div>
-
     <script type="module" src="./src/main.js"></script>
 </body>
 
