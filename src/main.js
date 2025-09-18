@@ -1,5 +1,6 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/controls/OrbitControls.js';
+import { WeaponSimulation, WEAPONS } from './weaponSimulation.js';
 
 // Simple helper: convert lat/lon to local meters using equirectangular approx
 function latLonToMeters(lat, lon, origin) {
@@ -51,6 +52,17 @@ function initMap() {
         isDrawing = false;
     });
     // If mouse leaves the map while drawing, cancel drawing and re-enable dragging
+
+    // Add weapon simulation on click
+    map.on('dblclick', (e) => {
+        console.log('Double click at:', e.latlng);
+        console.log('WeaponSim buildings:', weaponSim.buildings.length);
+        console.log('WeaponSim scene:', weaponSim.scene);
+        console.log('WeaponSim origin:', weaponSim.origin);
+        const weaponType = document.getElementById('weaponSelect').value;
+        const weapon = WEAPONS[weaponType];
+        weaponSim.simulateImpact(weapon, e.latlng.lat, e.latlng.lng);
+    });
 }
 
 async function fetchOSM(bbox) {
@@ -982,6 +994,9 @@ function addBuildingsToScene(meshes) {
         }
         scene.add(mesh);
         buildings.push(mesh);
+        // Compute bounding box and normals for later use in weapon simulation
+        mesh.geometry.computeBoundingBox();
+        mesh.geometry.computeVertexNormals();
         // labels removed by user request
     }
 }
@@ -1435,8 +1450,16 @@ function addInfraToScene(infra) {
     }
 }
 
-function animate() {
+let lastTime = 0;
+
+function animate(currentTime) {
     requestAnimationFrame(animate);
+    const deltaTime = (currentTime - lastTime) / 1000; // Convert to seconds
+    lastTime = currentTime;
+
+    // Update shake effects
+    if (weaponSim) weaponSim.updateShakeEffects(deltaTime);
+
     controls.update();
     renderer.render(scene, camera);
 }
@@ -1445,6 +1468,7 @@ let buildingTexture = null;
 
 // Wire UI
 initMap();
+let weaponSim = new WeaponSimulation(map);
 initThree();
 // populate dataset selector once DOM/UI is ready
 loadOpenTopoDatasets();
@@ -1466,6 +1490,10 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         }
         // render based on selections
         if (parsed.buildings && document.getElementById('cb_building').checked) addBuildingsToScene(parsed.buildings);
+        // Update weapon simulation with current buildings, scene and origin
+        weaponSim.buildings = buildings;
+        weaponSim.scene = scene;
+        weaponSim.origin = { lat: center[0], lon: center[1] };
         if (parsed.roads && document.getElementById('cb_road').checked) addRoadsToScene(parsed.roads);
         // water is now merged into the terrain; do not create a separate water layer
         if (parsed.parks && document.getElementById('cb_park').checked) addParksToScene(parsed.parks);
@@ -1523,5 +1551,10 @@ function setAllControls(yes) {
 }
 if (checkAllBtn) checkAllBtn.addEventListener('click', () => setAllControls(true));
 if (uncheckAllBtn) uncheckAllBtn.addEventListener('click', () => setAllControls(false));
+
+// Weapon simulation controls
+document.getElementById('clearImpactsBtn').addEventListener('click', () => {
+    weaponSim.clearImpacts();
+});
 
 export { };

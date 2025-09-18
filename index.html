@@ -91,6 +91,16 @@
                     <label class="block"><input type="checkbox" id="cb_bridge"> Cầu</label>
                 </div>
             </div>
+            <div class="absolute top-2 right-2 bg-black/50 p-2 rounded">
+                <div class="mb-2 font-semibold text-gray-200">Giả lập vũ khí</div>
+                <select id="weaponSelect" class="w-full bg-gray-800 text-white text-sm p-1 rounded mb-2">
+                    <option value="bomb">Bom</option>
+                    <option value="missile">Tên lửa</option>
+                    <option value="artillery">Pháo</option>
+                </select>
+                <button id="clearImpactsBtn" class="px-3 py-1 bg-red-600 rounded">Xóa ảnh hưởng</button>
+                <div class="text-xs text-gray-300 mt-1">Double-click trên bản đồ để giả lập</div>
+            </div>
             <div class="absolute bottom-2 left-2 text-sm text-gray-300 p-2 bg-black/40 rounded">Giữ <strong>Shift</strong> và nhấp-drag trên bản đồ để
                 chọn vùng; kéo thả bình thường để di chuyển/zoom bản đồ. Sau đó nhấn "Quét khu vực"</div>
         </div>
