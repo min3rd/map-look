@@ -59,15 +59,11 @@ function initMap() {
 
     // Add weapon simulation on click
     map.on('dblclick', (e) => {
-        console.log('Double click at:', e.latlng);
-        console.log('WeaponSim buildings:', weaponSim.buildings.length);
-        console.log('WeaponSim scene:', weaponSim.scene);
-        console.log('WeaponSim origin:', weaponSim.origin);
         const weaponType = document.getElementById('weaponSelect').value;
         const weapon = WEAPONS[weaponType];
         weaponSim.simulateImpact(weapon, e.latlng.lat, e.latlng.lng);
         // persist impacts immediately so reload restores them
-        try { saveAppState(); } catch (err) { console.warn('saveAppState failed after impact', err); }
+        try { saveAppState(); } catch (err) { }
     });
 }
 
@@ -106,11 +102,11 @@ function saveAppState() {
                 };
                 state.terrainGrid = tg;
             }
-        } catch (e) { console.warn('Failed to include terrainGrid in saved state', e); }
+        } catch (e) { }
         // save camera and controls target if available
         try {
             if (camera) {
-                state.camera = { pos: camera.position.toArray(), target: controls ? [controls.target.x, controls.target.y, controls.target.z] : [0,0,0] };
+                state.camera = { pos: camera.position.toArray(), target: controls ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0] };
             }
         } catch (e) { }
         // serialize impacts (weapon type, lat, lon)
@@ -122,7 +118,7 @@ function saveAppState() {
             }
         }
         localStorage.setItem(key, JSON.stringify(state));
-    } catch (e) { console.warn('Failed to save state', e); }
+    } catch (e) { }
 }
 
 // Restore state from localStorage if present. Recreates 3D scene objects and impacts.
@@ -135,11 +131,11 @@ function loadAppState() {
         if (!state) return;
 
         // perform restore asynchronously so we can await terrain build
-    async function restoreFromState(st) {
+        async function restoreFromState(st) {
             try {
                 if (!st.parsed) return;
-        // show overlay
-        try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.remove('hidden'); } catch (e) {}
+                // show overlay
+                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.remove('hidden'); } catch (e) { }
                 lastParsed = st.parsed;
                 lastOrigin = st.origin || lastOrigin;
                 lastBBox = st.bbox || lastBBox;
@@ -147,7 +143,6 @@ function loadAppState() {
                 // If a saved terrainGrid is present, restore directly from it (no API calls)
                 if (st.terrainGrid) {
                     const ok = restoreTerrainFromGrid(st.terrainGrid);
-                    if (!ok) console.warn('restoreTerrainFromGrid failed, falling back to buildTerrainForBBox');
                 } else {
                     // If we have terrainInfo saved, rebuild terrain first (so buildings are placed correctly)
                     const tinfo = st.terrainInfo || (lastBBox ? { bbox: lastBBox, gridSize: 48, dataset: selectedDataset } : null);
@@ -157,7 +152,7 @@ function loadAppState() {
                             if (tinfo.dataset) selectedDataset = tinfo.dataset;
                             await buildTerrainForBBox(tinfo.bbox, tinfo.gridSize || 48, (lastParsed && lastParsed.water) ? lastParsed.water : null);
                             selectedDataset = prevDataset;
-                        } catch (e) { console.warn('Failed to rebuild terrain during restore', e); }
+                        } catch (e) { }
                     }
                 }
 
@@ -207,7 +202,7 @@ function loadAppState() {
                         try {
                             const w = WEAPONS[imp.weapon] || WEAPONS.bomb;
                             weaponSim.simulateImpact(w, imp.lat, imp.lon);
-                        } catch (e) { console.warn('Failed restoring impact', e); }
+                        } catch (e) { }
                     }
                 }
 
@@ -220,16 +215,16 @@ function loadAppState() {
                             controls.update();
                         }
                     }
-                } catch (e) { console.warn('Failed restoring camera', e); }
+                } catch (e) { }
 
                 // hide overlay
-                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) {}
-            } catch (e) { console.warn('restoreFromState error', e); }
+                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) { }
+            } catch (e) { }
         }
 
         // kick off async restore but don't block startup
         restoreFromState(state);
-    } catch (e) { console.warn('Failed to load saved state', e); }
+    } catch (e) { }
 }
 
 async function fetchOSM(bbox) {
@@ -600,20 +595,17 @@ async function fetchElevationPoints(points) {
                     if (isLocal) body.append('dataset', selectedDataset);
                     const pres = await fetch(base, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
                     if (!pres.ok) {
-                        console.warn('Elevation POST failed for batch', i, 'status', pres.status);
                         data = null;
                     } else {
                         data = await pres.json();
                     }
                 }
             } catch (e) {
-                console.warn('Elevation fetch attempt error for batch', i, 'attempt', attempt, e);
                 data = null;
             }
             const keys = Object.keys(data || {});
             // if server returned an error status object, retry after a short backoff
             if (keys.length === 2 && keys.includes('error') && keys.includes('status')) {
-                console.warn('OpenTopo returned error for batch', i, 'attempt', attempt, data);
                 data = null;
                 await sleep(250 * (attempt + 1));
                 continue;
@@ -719,7 +711,6 @@ async function fetchElevationPoints(points) {
                 } else {
                     // no usable results, push zeros for this batch
                     for (let k = 0; k < batch.length; k++) out.push(0);
-                    console.warn('fetchElevationPoints: results[] present but no usable locations for batch', i);
                 }
             }
         } else {
@@ -737,7 +728,6 @@ async function fetchElevationPoints(points) {
         if (out.length < expectedTotal) {
             const need = expectedTotal - out.length;
             for (let k = 0; k < need; k++) out.push(0);
-            console.warn('fetchElevationPoints: padded', need, 'zeros for batch', i, 'after', attempt + 1, 'attempts');
         }
 
         // diagnostic: check for abrupt large jumps in this batch
@@ -746,7 +736,6 @@ async function fetchElevationPoints(points) {
             for (let k = expectedTotal - batch.length + 1; k < expectedTotal; k++) {
                 const v = out[k]; if (Math.abs(v - last) > 1000) jumps++; last = v;
             }
-            if (jumps > Math.max(1, Math.floor(batch.length / 10))) console.warn('Large elevation jumps detected in batch — possible ordering mismatch', { batchStart: i, batchSize: batch.length, jumps });
         }
     }
     return out;
@@ -756,7 +745,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
     // bbox = [south, west, north, east]
     const [s, w, n, e] = bbox;
     const nx = gridSize, ny = gridSize;
-    try { lastBBox = bbox; lastGridSize = gridSize; } catch (e) {}
+    try { lastBBox = bbox; lastGridSize = gridSize; } catch (e) { }
     const lats = new Array(ny);
     const lons = new Array(nx);
     for (let j = 0; j < ny; j++) lats[j] = s + (n - s) * (j / (ny - 1));
@@ -1046,7 +1035,7 @@ function restoreTerrainFromGrid(tg) {
         const nx = tg.nx, ny = tg.ny;
         const lats = tg.lats, lons = tg.lons, heights = tg.heights;
         const origin = tg.origin || { lat: (lats[0] + lats[ny - 1]) / 2, lon: (lons[0] + lons[nx - 1]) / 2 };
-        const minH = (typeof tg.minH === 'number') ? tg.minH : (function() { let m=Infinity; for (let j=0;j<ny;j++) for (let i=0;i<nx;i++) if (typeof heights[j][i]==='number' && heights[j][i]<m) m=heights[j][i]; return (m===Infinity?0:m); })();
+        const minH = (typeof tg.minH === 'number') ? tg.minH : (function () { let m = Infinity; for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (typeof heights[j][i] === 'number' && heights[j][i] < m) m = heights[j][i]; return (m === Infinity ? 0 : m); })();
         const visualScale = tg.visualScale || VERT_SCALE;
 
         // compute xy grid
@@ -1056,7 +1045,7 @@ function restoreTerrainFromGrid(tg) {
         // compute min/max and grid spacing
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const p = xyGrid[j][i]; if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y; }
-        const p00 = xyGrid[0][0]; const p10 = xyGrid[0][Math.min(1, nx-1)]; const p01 = xyGrid[Math.min(1, ny-1)][0];
+        const p00 = xyGrid[0][0]; const p10 = xyGrid[0][Math.min(1, nx - 1)]; const p01 = xyGrid[Math.min(1, ny - 1)][0];
         const gridDx = Math.abs(p10.x - p00.x) || (tg.dx || 1);
         const gridDy = Math.abs(p01.y - p00.y) || (tg.dy || 1);
 
@@ -1098,7 +1087,7 @@ function restoreTerrainFromGrid(tg) {
 
         terrainGrid = { nx, ny, lats, lons, heights, origin, dx: gridDx, dy: gridDy, minX, minY, minH, visualScale, xyGrid };
         return true;
-    } catch (e) { console.warn('restoreTerrainFromGrid failed', e); return false; }
+    } catch (e) { }
 }
 
 // Robust sampler: raycast down onto the terrain mesh to get exact surface Z (world units)
@@ -1162,7 +1151,7 @@ function initThree() {
             }
         },
         undefined,
-        (err) => { console.warn('Building texture failed to load:', err); }
+        (err) => { }
     );
 
     window.addEventListener('resize', () => {
@@ -1715,14 +1704,13 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         showLoader(true);
         const osm = await fetchOSM(bbox);
         const parsed = parseOSM(osm, center);
-            // persist parsed data for session restore
-            lastParsed = parsed;
-            lastOrigin = { lat: center[0], lon: center[1] };
+        // persist parsed data for session restore
+        lastParsed = parsed;
+        lastOrigin = { lat: center[0], lon: center[1] };
         // build terrain after parsing so we can merge water into terrain
         try {
             await buildTerrainForBBox(bbox, 48, parsed.water);
         } catch (terrErr) {
-            console.warn('Terrain fetch failed, continuing without terrain', terrErr);
         }
         // render based on selections
         if (parsed.buildings && document.getElementById('cb_building').checked) addBuildingsToScene(parsed.buildings);
@@ -1766,16 +1754,12 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
             }
         }
     } catch (err) {
-        console.error(err);
         showToast('Lỗi khi lấy dữ liệu OSM', 'error');
     } finally {
         showLoader(false);
-            try { saveAppState(); } catch (err) { console.warn('saveAppState failed after scan', err); }
+        try { saveAppState(); } catch (err) { }
     }
 });
-
-// Auto-restore on startup disabled. Users can restore using the "Tải phiên" button.
-console.info('Auto-restore disabled: use the Load Session button to restore saved sessions.');
 
 // enter 3D: center camera on selection
 // (enter3D removed - flight/ptr-lock controls disabled per user request)
@@ -1822,10 +1806,10 @@ if (clearSessionBtn) clearSessionBtn.addEventListener('click', () => {
     const key = 'maplook_state_v1';
     localStorage.removeItem(key);
     // also clear current scene objects
-    try { weaponSim.clearImpacts(); } catch (e) {}
-    try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) {}
+    try { weaponSim.clearImpacts(); } catch (e) { }
+    try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) { }
     // remove terrain from scene and clear terrainGrid
-    try { if (terrain) { scene.remove(terrain); terrain = null; } terrainGrid = null; lastBBox = null; lastGridSize = null; } catch (e) {}
+    try { if (terrain) { scene.remove(terrain); terrain = null; } terrainGrid = null; lastBBox = null; lastGridSize = null; } catch (e) { }
     showToast('Phiên đã bị xóa.', 'success');
 });
 
@@ -1834,8 +1818,6 @@ function showToast(message, type = 'info', duration = 3000) {
     try {
         const container = document.getElementById('toastContainer');
         if (!container) {
-            console.warn('Toast container not found, fallback to alert');
-            alert(message);
             return;
         }
         const toast = document.createElement('div');
@@ -1871,11 +1853,10 @@ function showToast(message, type = 'info', duration = 3000) {
         // allow click to dismiss early
         toast.addEventListener('click', () => {
             clearTimeout(timeout);
-            try { toast.remove(); } catch (e) {}
+            try { toast.remove(); } catch (e) { }
         });
     } catch (e) {
-        console.error('showToast failed', e);
-        try { alert(message); } catch (e2) {}
+        try { alert(message); } catch (e2) { }
     }
 }
 
