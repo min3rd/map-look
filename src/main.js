@@ -65,6 +65,102 @@ function initMap() {
         // persist impacts immediately so reload restores them
         try { saveAppState(); } catch (err) { }
     });
+
+    // Right-click (contextmenu) shows detailed local damage/death estimate for clicked point
+    map.on('contextmenu', async (e) => {
+        try {
+            const lat = e.latlng.lat, lon = e.latlng.lng;
+            // small bbox around click: ~150m radius
+            const meters = 150;
+            const deltaLat = meters / 111000.0; // approx degrees
+            const deltaLon = meters / (111000.0 * Math.cos(lat * Math.PI / 180));
+            const bbox = [lat - deltaLat, lon - deltaLon, lat + deltaLat, lon + deltaLon];
+            const popTotal = parseFloat(document.getElementById('popTotal') && document.getElementById('popTotal').value) || null;
+            const popDensity = parseFloat(document.getElementById('popDensity') && document.getElementById('popDensity').value) || null;
+            const mortalityRate = parseFloat(document.getElementById('mortalityRate') && document.getElementById('mortalityRate').value) || 0.01;
+            const gridSize = parseInt(document.getElementById('choroplethGridSize') && document.getElementById('choroplethGridSize').value) || 10;
+            const params = { bbox, popTotal, popDensity, mortalityRate, gridSize };
+            const vizSel = document.getElementById('vizModeSelect');
+            // only compute when user wants choropleth/heatmap
+            if (vizSel && (vizSel.value === 'choropleth' || vizSel.value === 'heatmap')) {
+                const dummyScenario = weaponSim.impacts && weaponSim.impacts.length ? weaponSim.impacts.map(i => ({ weapon: i.weapon, lat: i.position.lat, lon: i.position.lon })) : [];
+                const cas = await weaponSim.estimateCasualtiesForScenario(dummyScenario, params);
+                let html = `<div style="min-width:180px"><b>Location details</b><br/>`;
+                html += `Total damage (local): ${Math.round(cas.totalDamage || 0)}u<br/>`;
+                html += `Estimated deaths: ${Math.round(cas.estimatedDeaths || 0)}<br/>`;
+                if (cas.perCell && cas.perCell.length) {
+                    const top = cas.perCell.slice().sort((a,b)=> (b.deaths||0)-(a.deaths||0)).slice(0,3);
+                    html += `<hr/><small>Top cells:</small><br/>`;
+                    for (const t of top) html += `r${t.r},c${t.c}: ${Math.round(t.deaths||0)}<br/>`;
+                }
+                html += `</div>`;
+                L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
+            }
+        } catch (err) { console.warn('detail popup error', err); }
+    });
+
+    // Run scenario button
+    try {
+        const runBtn = document.getElementById('runScenarioBtn');
+        if (runBtn) runBtn.addEventListener('click', async () => {
+            // determine bbox from drawn rectangle if present, else use current map bounds
+            let bbox = null;
+            if (rect && rect.getBounds) {
+                const b = rect.getBounds();
+                bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+            } else {
+                const b = map.getBounds();
+                bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+            }
+            const weaponType = document.getElementById('weaponSelect').value;
+            const count = Math.max(1, parseInt(document.getElementById('weaponCount').value || '1'));
+            const distribution = document.getElementById('distributionSelect').value || 'grid';
+            // generate scenario (this method implemented in weaponSimulation)
+            try {
+                const scenario = weaponSim.generateScenario({ bbox, weaponType, count, distribution });
+                // estimate damage before applying visuals (fast)
+                let summary = null;
+                try { summary = weaponSim.estimateDamageForScenario(scenario); } catch (e) { summary = null; }
+                // simulate scenario (visuals + building damage)
+                weaponSim.simulateScenario(scenario);
+                // apply visualization (heatmap/choropleth) if user selected
+                try { applyVisualizationIfRequested(scenario, bbox); } catch (e) { console.warn('apply viz failed', e); }
+                // compute casualties (if user provided params)
+                const popTotal = parseFloat(document.getElementById('popTotal') && document.getElementById('popTotal').value) || null;
+                const popDensity = parseFloat(document.getElementById('popDensity') && document.getElementById('popDensity').value) || null;
+                const mortalityRate = parseFloat(document.getElementById('mortalityRate') && document.getElementById('mortalityRate').value) || 0.01;
+                let casualties = null;
+                try {
+                    casualties = weaponSim.estimateCasualtiesForScenario(scenario, { bbox, popTotal, popDensity, mortalityRate });
+                } catch (e) { casualties = null; }
+                saveAppState();
+                // show summary: totalDamage, top buildings and estimated deaths
+                const summaryEl = document.getElementById('damageSummary');
+                if (summary && typeof summary.totalDamage === 'number') {
+                    const topArr = (summary.buildingDamages || []).slice(0, 3);
+                    const top = topArr.map((b, i) => `${i+1}. ${Math.round(b.damage)}u`).join('; ');
+                    let txt = `Tổng thiệt hại: ${Math.round(summary.totalDamage)}u` + (top ? ` — Top: ${top}` : '');
+                    if (casualties && typeof casualties.estimatedDeaths === 'number') txt += ` — Est deaths: ${Math.round(casualties.estimatedDeaths)}`;
+                    showToast(`Triển khai ${scenario.length} vũ khí (${weaponType}) — Tổng thiệt hại ≈ ${Math.round(summary.totalDamage)}u.`);
+                    if (summaryEl) summaryEl.textContent = txt;
+                } else {
+                    let txt = `Đã triển khai ${scenario.length} vũ khí (${weaponType})`;
+                    if (casualties && typeof casualties.estimatedDeaths === 'number') txt += ` — Est deaths: ${Math.round(casualties.estimatedDeaths)}`;
+                    showToast(txt);
+                    if (summaryEl) summaryEl.textContent = (casualties && typeof casualties.estimatedDeaths === 'number') ? `Tổng thiệt hại: — — Est deaths: ${Math.round(casualties.estimatedDeaths)}` : `Tổng thiệt hại: —`;
+                }
+            } catch (e) {
+                console.error('Failed to run scenario', e);
+                showToast('Lỗi khi chạy giả lập', 'error');
+            }
+        });
+    } catch (e) { }
+
+    // clear impacts shortcut
+    try {
+        const clearBtn = document.getElementById('clearImpactsBtn') || document.getElementById('clearImpactsBtn');
+        if (clearBtn) clearBtn.addEventListener('click', () => { weaponSim.clearImpacts(); saveAppState(); });
+    } catch (e) { }
 }
 
 // Persist application state to localStorage
@@ -1212,6 +1308,20 @@ function addBuildingsToScene(meshes) {
             mesh.position.z = baseHeight;
         }
         scene.add(mesh);
+        // attach footprint points and tags for population allocation
+        try {
+            mesh.userData.footprint = m.pts.map(p => ({ x: p.x, y: p.y }));
+            // compute polygon area (shoelace) in local meters
+            let area = 0;
+            const pts = mesh.userData.footprint;
+            for (let i = 0, l = pts.length; i < l; i++) {
+                const a = pts[i], b = pts[(i + 1) % l];
+                area += (a.x * b.y) - (b.x * a.y);
+            }
+            area = Math.abs(area) * 0.5;
+            mesh.userData.footprintArea = area; // m^2
+            mesh.userData.tags = m.tags || {};
+        } catch (e) { mesh.userData.footprintArea = 0; mesh.userData.tags = m.tags || {}; }
         buildings.push(mesh);
         // Compute bounding box and normals for later use in weapon simulation
         mesh.geometry.computeBoundingBox();
@@ -1761,6 +1871,155 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
     }
 });
 
+// Heatmap / Choropleth support
+let heatLayer = null;
+let choroplethLayer = null;
+function clearVizLayers() {
+    try { if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; } } catch (e) {}
+    try { if (choroplethLayer) { map.removeLayer(choroplethLayer); choroplethLayer = null; } } catch (e) {}
+}
+
+function buildHeatmapFromScenario(scenario) {
+    // Leaflet.heat expects array of [lat, lon, intensity]
+    const points = [];
+    const origin = weaponSim.origin || { lat: 21.028511, lon: 105.804817 };
+    for (const s of scenario) {
+        // intensity use weapon power (normalized) — here we use power directly
+        const lat = s.lat, lon = s.lon;
+        const intensity = (s.weapon && s.weapon.power) ? s.weapon.power : 1;
+        points.push([lat, lon, Math.max(0.1, intensity / 50)]);
+    }
+    clearVizLayers();
+    try {
+        heatLayer = L.heatLayer(points, { radius: 25, blur: 15, maxZoom: 17 }).addTo(map);
+    } catch (e) {
+        console.warn('Failed to create heatLayer', e);
+    }
+}
+
+function buildChoroplethFromScenario(scenario, bbox, gridSize = 10, casualtiesGrid = null) {
+    // bbox = [south, west, north, east]
+    const [s, w, n, e] = bbox;
+    // create grid cells (gridSize x gridSize)
+    const rows = gridSize, cols = gridSize;
+    const cellWidth = (e - w) / cols, cellHeight = (n - s) / rows;
+    // aggregate damage per cell by sampling impacts
+    const cellValues = new Array(rows);
+    for (let r = 0; r < rows; r++) {
+        cellValues[r] = new Array(cols).fill(0);
+    }
+    const origin = weaponSim.origin || { lat: (s + n) / 2, lon: (w + e) / 2 };
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const cellLat = s + (r + 0.5) * cellHeight;
+            const cellLon = w + (c + 0.5) * cellWidth;
+            // compute damage contribution from each impact to this cell center
+            let val = 0;
+            for (const imp of scenario) {
+                const impPos = latLonToMeters(imp.lat, imp.lon, origin);
+                const cellPos = latLonToMeters(cellLat, cellLon, origin);
+                const dist = Math.hypot(impPos.x - cellPos.x, impPos.y - cellPos.y);
+                val += imp.weapon.calculateDamage(dist);
+            }
+            cellValues[r][c] = val;
+        }
+    }
+    // determine color scale
+    let maxV = 0; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (cellValues[r][c] > maxV) maxV = cellValues[r][c];
+    if (!isFinite(maxV) || maxV <= 0) maxV = 1;
+    // build layer group
+    clearVizLayers();
+    choroplethLayer = L.layerGroup();
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const cellS = s + r * cellHeight;
+            const cellW = w + c * cellWidth;
+            const cellN = cellS + cellHeight;
+            const cellE = cellW + cellWidth;
+            const val = cellValues[r][c];
+            const t = Math.min(1, val / maxV);
+            // color ramp: green -> yellow -> red
+            const col = t < 0.5 ? interpolateColor([0, 128, 0], [255, 200, 0], t * 2) : interpolateColor([255, 200, 0], [200, 20, 20], (t - 0.5) * 2);
+            const hex = rgbToHex(col[0], col[1], col[2]);
+            const deathVal = casualtiesGrid && casualtiesGrid[r] && typeof casualtiesGrid[r][c] === 'number' ? casualtiesGrid[r][c] : null;
+            const popupTxt = deathVal !== null ? `Damage: ${val.toFixed(1)}<br/>Est deaths: ${Math.round(deathVal)}` : `Damage: ${val.toFixed(1)}`;
+            const rect = L.rectangle([[cellS, cellW], [cellN, cellE]], { color: hex, weight: 0, fillOpacity: 0.45 }).bindPopup(popupTxt);
+            rect.addTo(choroplethLayer);
+        }
+    }
+    choroplethLayer.addTo(map);
+    // render legend for damage
+    try { renderLegend(maxV, 'Damage (u)'); } catch (e) {}
+}
+
+function interpolateColor(a, b, t) { return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)]; }
+function rgbToHex(r, g, b) { return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`; }
+
+// Render a simple legend into #vizLegend showing color ramp for 0..maxValue
+function renderLegend(maxValue, label) {
+    try {
+        const el = document.getElementById('vizLegend');
+        if (!el) return;
+        const maxV = (typeof maxValue === 'number' && isFinite(maxValue) && maxValue > 0) ? maxValue : 1;
+        const stops = [0, 0.25, 0.5, 0.75, 1.0];
+        let html = `<div style="font-size:12px"><strong>${label || 'Legend'}</strong></div><div style="display:flex;align-items:center;margin-top:6px">`;
+        for (const s of stops) {
+            const col = s < 0.5 ? interpolateColor([0,128,0],[255,200,0], s * 2) : interpolateColor([255,200,0],[200,20,20], (s - 0.5) * 2);
+            const hex = rgbToHex(col[0], col[1], col[2]);
+            html += `<div style="width:28px;height:14px;background:${hex};margin-right:4px;border:1px solid #222"></div>`;
+        }
+        html += `</div><div style="font-size:11px;margin-top:4px;display:flex;justify-content:space-between;max-width:170px"><span>0</span><span>${Math.round(maxV/2)}</span><span>${Math.round(maxV)}</span></div>`;
+        el.innerHTML = html;
+    } catch (e) { console.warn('renderLegend failed', e); }
+}
+
+// update viz when user changes mode
+try {
+    const vizSel = document.getElementById('vizModeSelect');
+    if (vizSel) vizSel.addEventListener('change', () => {
+        // simply clear existing layers; if there is a last scenario we can re-create viz
+        clearVizLayers();
+    });
+} catch (e) {}
+
+// After running a scenario, build selected visualization
+function applyVisualizationIfRequested(scenario, bbox) {
+    try {
+        const vizSel = document.getElementById('vizModeSelect');
+        if (!vizSel) return;
+        const mode = vizSel.value;
+        if (mode === 'heatmap') buildHeatmapFromScenario(scenario);
+        else if (mode === 'choropleth') {
+                // compute casualties grid from UI params
+            const popTotal = parseFloat(document.getElementById('popTotal') && document.getElementById('popTotal').value) || null;
+            const popDensity = parseFloat(document.getElementById('popDensity') && document.getElementById('popDensity').value) || null;
+            const mortalityRate = parseFloat(document.getElementById('mortalityRate') && document.getElementById('mortalityRate').value) || 0.01;
+            const params = { bbox: bbox || mapBoundsToBBox(), popTotal: popTotal, popDensity: popDensity, mortalityRate: mortalityRate };
+                let cas = null;
+                try { cas = weaponSim.estimateCasualtiesForScenario(scenario, params); } catch (e) { cas = null; }
+                let casualtiesGrid = null;
+                if (cas && Array.isArray(cas.perCell) && cas.perCell.length) {
+                    // convert flat perCell into 2D grid matching grid size used in buildChoropleth
+                const gridSize = parseInt(document.getElementById('choroplethGridSize') && document.getElementById('choroplethGridSize').value) || 10;
+                    casualtiesGrid = new Array(gridSize);
+                    for (let r = 0; r < gridSize; r++) casualtiesGrid[r] = new Array(gridSize).fill(0);
+                    for (const p of cas.perCell) {
+                        if (p.r >= 0 && p.c >= 0 && p.r < gridSize && p.c < gridSize) casualtiesGrid[p.r][p.c] = p.deaths;
+                    }
+                    // update damageSummary with deaths
+                    const summaryEl = document.getElementById('damageSummary');
+                    if (summaryEl) summaryEl.textContent = `Tổng thiệt hại: ${Math.round(cas.totalDamage)}u — Est deaths: ${Math.round(cas.estimatedDeaths)}`;
+                }
+            buildChoroplethFromScenario(scenario, bbox || mapBoundsToBBox(), gridSize, casualtiesGrid);
+            }
+        else clearVizLayers();
+    } catch (e) { console.warn('viz error', e); }
+}
+
+function mapBoundsToBBox() {
+    const b = map.getBounds(); return [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+}
+
 // enter 3D: center camera on selection
 // (enter3D removed - flight/ptr-lock controls disabled per user request)
 
@@ -1776,19 +2035,26 @@ function setAllControls(yes) {
 if (checkAllBtn) checkAllBtn.addEventListener('click', () => setAllControls(true));
 if (uncheckAllBtn) uncheckAllBtn.addEventListener('click', () => setAllControls(false));
 
-// Weapon simulation controls
-document.getElementById('clearImpactsBtn').addEventListener('click', () => {
-    weaponSim.clearImpacts();
-});
-
 // Panel toggle helpers
 function togglePanel(buttonId, bodyId) {
     const btn = document.getElementById(buttonId);
     const body = document.getElementById(bodyId);
     if (!btn || !body) return;
+    // prefer an explicit panel container: try known IDs then fallback to closest ancestor
+    let panel = document.getElementById('leftPanel') || document.getElementById('weaponPanel') || body.closest('[id$="Panel"]') || body.parentElement;
+    // if button is inside a header, find its nearest panel ancestor instead
+    try {
+        const bAncestor = btn.closest('[id$="Panel"]');
+        if (bAncestor) panel = bAncestor;
+    } catch (e) {}
+
     btn.addEventListener('click', () => {
         const closed = body.classList.toggle('hidden');
+        try { if (panel) panel.classList.toggle('collapsed', closed); } catch (e) {}
+        // update button glyph consistently
         btn.textContent = closed ? '▸' : '▾';
+        // ensure focus and accessibility
+        try { btn.setAttribute('aria-expanded', String(!closed)); } catch (e) {}
     });
 }
 

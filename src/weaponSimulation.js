@@ -511,6 +511,320 @@ export class WeaponSimulation {
             this.simulateImpact(weapon, lat, lon);
         });
     }
+
+    // Generate a scenario of impacts within a bbox.
+    // opts: { bbox: [south, west, north, east], weaponType: string, count: number, distribution: 'grid'|'random'|'cluster' }
+    generateScenario(opts) {
+        const bbox = opts.bbox; // [s,w,n,e]
+        const count = opts.count || 1;
+        const wType = opts.weaponType || 'bomb';
+        const distribution = opts.distribution || 'grid';
+        const results = [];
+        const [s, w, n, e] = bbox;
+
+        if (distribution === 'grid') {
+            // produce roughly sqrt(count) x sqrt(count) grid
+            const cols = Math.ceil(Math.sqrt(count));
+            const rows = Math.ceil(count / cols);
+            let placed = 0;
+            for (let r = 0; r < rows && placed < count; r++) {
+                for (let c = 0; c < cols && placed < count; c++) {
+                    const lat = s + (n - s) * ((r + 0.5) / rows);
+                    const lon = w + (e - w) * ((c + 0.5) / cols);
+                    results.push({ weapon: WEAPONS[wType], lat, lon });
+                    placed++;
+                }
+            }
+        } else if (distribution === 'random') {
+            for (let i = 0; i < count; i++) {
+                const lat = s + Math.random() * (n - s);
+                const lon = w + Math.random() * (e - w);
+                results.push({ weapon: WEAPONS[wType], lat, lon });
+            }
+        } else if (distribution === 'cluster') {
+            // k-means on uniform random seeds but then refine centers; we'll place clusters count/4 centers
+            const k = Math.max(1, Math.round(count / 4));
+            // init centers randomly
+            const centers = [];
+            for (let i = 0; i < k; i++) centers.push([s + Math.random() * (n - s), w + Math.random() * (e - w)]);
+            // create N sample points to cluster (oversample for stability)
+            const samples = [];
+            const samplesN = Math.min(200, Math.max(50, count * 5));
+            for (let i = 0; i < samplesN; i++) samples.push([s + Math.random() * (n - s), w + Math.random() * (e - w)]);
+            // iterate k-means a few times
+            for (let iter = 0; iter < 8; iter++) {
+                const clusters = new Array(k).fill(0).map(() => []);
+                for (const p of samples) {
+                    let best = 0, bestD = Infinity;
+                    for (let ci = 0; ci < centers.length; ci++) {
+                        const d = (p[0] - centers[ci][0]) * (p[0] - centers[ci][0]) + (p[1] - centers[ci][1]) * (p[1] - centers[ci][1]);
+                        if (d < bestD) { bestD = d; best = ci; }
+                    }
+                    clusters[best].push(p);
+                }
+                // recompute centers
+                for (let ci = 0; ci < centers.length; ci++) {
+                    const cl = clusters[ci];
+                    if (!cl || !cl.length) continue;
+                    let sum0 = 0, sum1 = 0;
+                    for (const q of cl) { sum0 += q[0]; sum1 += q[1]; }
+                    centers[ci][0] = sum0 / cl.length;
+                    centers[ci][1] = sum1 / cl.length;
+                }
+            }
+            // now allocate counts to centers proportionally
+            const weights = new Array(k).fill(1);
+            // simple proportional allocation by cluster sizes
+            for (let i = 0; i < k; i++) weights[i] = 1;
+            // place points around centers with Gaussian spread
+            let placed = 0;
+            while (placed < count) {
+                const ci = placed % k;
+                // gaussian offset small fraction of bbox size
+                const lat = centers[ci][0] + (Math.random() - 0.5) * (n - s) * 0.08;
+                const lon = centers[ci][1] + (Math.random() - 0.5) * (e - w) * 0.08;
+                const clampedLat = Math.max(s, Math.min(n, lat));
+                const clampedLon = Math.max(w, Math.min(e, lon));
+                results.push({ weapon: WEAPONS[wType], lat: clampedLat, lon: clampedLon });
+                placed++;
+            }
+        }
+
+        return results;
+    }
+
+    // Estimate total damage from a scenario by sampling each building centroid and summing damage contributions.
+    // Returns { totalDamage, buildingDamages: [{building, damage}], details }
+    estimateDamageForScenario(scenario) {
+        const summary = { totalDamage: 0, buildingDamages: [], details: {} };
+        if (!this.buildings || !this.buildings.length) return summary;
+        for (const b of this.buildings) {
+            // compute building centroid in local meters by averaging vertices
+            try {
+                const posAttr = b.geometry && b.geometry.attributes && b.geometry.attributes.position;
+                if (!posAttr) continue;
+                let sx = 0, sy = 0, sc = 0;
+                for (let vi = 0; vi < posAttr.count; vi++) {
+                    const vx = posAttr.getX(vi), vy = posAttr.getY(vi), vz = posAttr.getZ(vi);
+                    // only use base vertices (approx z near min)
+                    sx += vx + (b.position && b.position.x ? b.position.x : 0);
+                    sy += vy + (b.position && b.position.y ? b.position.y : 0);
+                    sc++;
+                }
+                if (sc === 0) continue;
+                const cx = sx / sc, cy = sy / sc;
+                // convert centroid to lat/lon using approximate inverse of latLonToMeters using origin
+                const origin = this.origin || { lat: 21.028511, lon: 105.804817 };
+                const R = 6378137;
+                const dLat = cy / R;
+                const dLon = cx / (R * Math.cos(origin.lat * Math.PI / 180));
+                const lat = origin.lat + (dLat * 180 / Math.PI);
+                const lon = origin.lon + (dLon * 180 / Math.PI);
+
+                // sum damage from all impacts in scenario
+                let bDamage = 0;
+                for (const imp of scenario) {
+                    const impPos = latLonToMeters(imp.lat, imp.lon, origin);
+                    const dx = impPos.x - cx, dy = impPos.y - cy;
+                    const dist = Math.hypot(dx, dy);
+                    bDamage += imp.weapon.calculateDamage(dist);
+                }
+                if (bDamage > 0) {
+                    summary.totalDamage += bDamage;
+                    summary.buildingDamages.push({ building: b, damage: bDamage });
+                }
+            } catch (e) { /* ignore building on failure */ }
+        }
+        // sort buildingDamages descending
+        summary.buildingDamages.sort((a, b) => b.damage - a.damage);
+        return summary;
+    }
+
+    // Estimate casualties given a scenario and simple population model.
+    // params: { bbox: [s,w,n,e], popTotal: number|null, popDensity: people_per_km2|null, mortalityRate: deaths_per_damageUnit }
+    estimateCasualtiesForScenario(scenario, params) {
+        const out = { totalDamage: 0, totalPopulation: 0, estimatedDeaths: 0, perCell: [] };
+        if (!scenario || !scenario.length) return out;
+        const bbox = params && params.bbox ? params.bbox : null;
+        const popTotal = params && typeof params.popTotal === 'number' && params.popTotal > 0 ? params.popTotal : null;
+        const popDensity = params && typeof params.popDensity === 'number' && params.popDensity > 0 ? params.popDensity : null;
+        const mortality = params && typeof params.mortalityRate === 'number' && params.mortalityRate > 0 ? params.mortalityRate : 0.01;
+
+        // prefer building-based allocation when building footprints available
+        if (this.buildings && this.buildings.length) {
+            // compute per-building damage using existing helper
+            const dmgSummary = this.estimateDamageForScenario(scenario);
+            out.totalDamage = dmgSummary.totalDamage || 0;
+
+            // compute total population available
+            let totalPop = 0;
+            if (popTotal) totalPop = popTotal;
+            else if (popDensity && bbox) {
+                const [s, w, n, e] = bbox;
+                const avgLat = (s + n) / 2 * Math.PI / 180;
+                const R = 6371; // km
+                const latKm = (n - s) * Math.PI / 180 * R;
+                const lonKm = (e - w) * Math.PI / 180 * R * Math.cos(avgLat);
+                const areaKm2 = Math.abs(latKm * lonKm);
+                totalPop = popDensity * areaKm2;
+            }
+            out.totalPopulation = totalPop;
+
+            // compute building areas and sum
+            let areaSum = 0;
+            const bInfos = [];
+            for (const bd of dmgSummary.buildingDamages) {
+                const b = bd.building;
+                const dmg = bd.damage || 0;
+                const area = (b.userData && b.userData.footprintArea) ? b.userData.footprintArea : 0;
+                const tagPop = b.userData && b.userData.tags && b.userData.tags.population ? parseFloat(b.userData.tags.population) : null;
+                bInfos.push({ building: b, damage: dmg, area: area, tagPop: tagPop, deaths: 0, popAlloc: 0 });
+                areaSum += Math.max(0, area);
+            }
+
+            // allocate population: prefer building tag population if exists, otherwise by footprint area proportion
+            let taggedTotal = 0;
+            for (const bi of bInfos) if (bi.tagPop) taggedTotal += bi.tagPop;
+            // if some buildings have explicit tag populations, use them and allocate remainder by area
+            if (taggedTotal > 0 && totalPop > 0) {
+                // scale tag populations to available totalPop proportionally
+                const scale = totalPop / taggedTotal;
+                for (const bi of bInfos) {
+                    if (bi.tagPop) bi.popAlloc = bi.tagPop * scale;
+                }
+                // allocate remaining population (if any) by area proportion
+                const allocated = bInfos.reduce((s, x) => s + (x.popAlloc || 0), 0);
+                const remain = Math.max(0, totalPop - allocated);
+                const areaAvailable = bInfos.reduce((s, x) => s + (x.area || 0), 0);
+                for (const bi of bInfos) {
+                    if (!bi.popAlloc) bi.popAlloc = (areaAvailable > 0) ? (remain * (bi.area / areaAvailable)) : 0;
+                }
+            } else if (totalPop > 0) {
+                // allocate all population by area
+                for (const bi of bInfos) bi.popAlloc = (areaSum > 0) ? (totalPop * (bi.area / areaSum)) : 0;
+            } else {
+                // no population info: set popAlloc to 0
+                for (const bi of bInfos) bi.popAlloc = 0;
+            }
+
+            // compute deaths per building and clamp to its allocated pop
+            let totalDeaths = 0;
+            for (const bi of bInfos) {
+                const deaths = bi.damage * mortality;
+                const clamped = Math.max(0, Math.min(bi.popAlloc || Infinity, deaths));
+                bi.deaths = clamped;
+                totalDeaths += clamped;
+            }
+
+            // if totalPop exists and deaths > totalPop then scale down proportionally
+            if (out.totalPopulation > 0 && totalDeaths > out.totalPopulation) {
+                const sc = out.totalPopulation / totalDeaths;
+                totalDeaths = 0;
+                for (const bi of bInfos) { bi.deaths *= sc; totalDeaths += bi.deaths; }
+            }
+
+            out.estimatedDeaths = totalDeaths;
+
+            // map building deaths into a coarse grid for choropleth compatibility
+            const gridSize = (params && params.gridSize) ? parseInt(params.gridSize) : 10;
+            const perCell = new Array(gridSize);
+            for (let r = 0; r < gridSize; r++) { perCell[r] = new Array(gridSize).fill(0); }
+            // determine bbox for grid mapping
+            const b = bbox || null;
+            if (b && b.length === 4) {
+                const [s, w, n, e] = b;
+                for (const bi of bInfos) {
+                    try {
+                        // compute building centroid lat/lon from mesh centroid
+                        const posAttr = bi.building.geometry && bi.building.geometry.attributes && bi.building.geometry.attributes.position;
+                        if (!posAttr) continue;
+                        let sx = 0, sy = 0, scnt = 0;
+                        for (let vi = 0; vi < posAttr.count; vi++) { sx += posAttr.getX(vi) + (bi.building.position ? bi.building.position.x || 0 : 0); sy += posAttr.getY(vi) + (bi.building.position ? bi.building.position.y || 0 : 0); scnt++; }
+                        if (scnt === 0) continue;
+                        const cx = sx / scnt, cy = sy / scnt;
+                        const origin = this.origin || { lat: (s + n) / 2, lon: (w + e) / 2 };
+                        const R = 6378137;
+                        const dLat = cy / R; const dLon = cx / (R * Math.cos(origin.lat * Math.PI / 180));
+                        const lat = origin.lat + (dLat * 180 / Math.PI); const lon = origin.lon + (dLon * 180 / Math.PI);
+                        // find cell
+                        const rr = Math.floor(((lat - s) / (n - s)) * gridSize);
+                        const cc = Math.floor(((lon - w) / (e - w)) * gridSize);
+                        const ridx = Math.max(0, Math.min(gridSize - 1, rr));
+                        const cidx = Math.max(0, Math.min(gridSize - 1, cc));
+                        perCell[ridx][cidx] += bi.deaths;
+                    } catch (e) { }
+                }
+            }
+            out.perCell = [];
+            for (let r = 0; r < perCell.length; r++) for (let c = 0; c < perCell[r].length; c++) out.perCell.push({ r, c, deaths: perCell[r][c] });
+            return out;
+        }
+
+        // fallback: original grid-based method (unchanged)
+        // compute damage grid similarly to choropleth but lower resolution for speed
+        const grid = 12;
+        let s = -1, w = -1, n = -1, e = -1;
+        if (bbox) { [s, w, n, e] = bbox; } else {
+            const o = this.origin || { lat: 21.028511, lon: 105.804817 };
+            s = o.lat - 0.02; n = o.lat + 0.02; w = o.lon - 0.02; e = o.lon + 0.02;
+        }
+        const rows = grid, cols = grid;
+        const cellH = (n - s) / rows, cellW = (e - w) / cols;
+        const origin = this.origin || { lat: (s + n) / 2, lon: (w + e) / 2 };
+        let totalDamage = 0;
+        const damageGrid = new Array(rows);
+        for (let r = 0; r < rows; r++) {
+            damageGrid[r] = new Array(cols).fill(0);
+            for (let c = 0; c < cols; c++) {
+                const latc = s + (r + 0.5) * cellH;
+                const lonc = w + (c + 0.5) * cellW;
+                let val = 0;
+                for (const imp of scenario) {
+                    const ip = latLonToMeters(imp.lat, imp.lon, origin);
+                    const cp = latLonToMeters(latc, lonc, origin);
+                    const dist = Math.hypot(ip.x - cp.x, ip.y - cp.y);
+                    val += imp.weapon.calculateDamage(dist);
+                }
+                damageGrid[r][c] = val;
+                totalDamage += val;
+            }
+        }
+        out.totalDamage = totalDamage;
+
+        // estimate total population in bbox
+        let totalPop = 0;
+        if (popTotal) totalPop = popTotal;
+        else if (popDensity && bbox) {
+            const avgLat = (s + n) / 2 * Math.PI / 180;
+            const R = 6371; // km
+            const latKm = (n - s) * Math.PI / 180 * R;
+            const lonKm = (e - w) * Math.PI / 180 * R * Math.cos(avgLat);
+            const areaKm2 = Math.abs(latKm * lonKm);
+            totalPop = popDensity * areaKm2;
+        }
+        out.totalPopulation = totalPop;
+
+        let totalDeaths = 0;
+        const perCell = [];
+        let gridSum = 0; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) gridSum += damageGrid[r][c];
+        if (gridSum <= 0) { out.estimatedDeaths = 0; out.perCell = perCell; return out; }
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const dmg = damageGrid[r][c];
+                let deaths = dmg * mortality;
+                perCell.push({ r, c, dmg, deaths });
+                totalDeaths += deaths;
+            }
+        }
+        if (totalPop > 0 && totalDeaths > totalPop) {
+            const scale = totalPop / totalDeaths;
+            totalDeaths = 0;
+            for (const p of perCell) { p.deaths *= scale; totalDeaths += p.deaths; }
+        }
+        out.perCell = perCell;
+        out.estimatedDeaths = totalDeaths;
+        return out;
+    }
 }
 
 // Predefined weapons
