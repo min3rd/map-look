@@ -1458,7 +1458,10 @@ function animate(currentTime) {
     lastTime = currentTime;
 
     // Update shake effects
-    if (weaponSim) weaponSim.updateShakeEffects(deltaTime);
+    if (weaponSim) {
+        weaponSim.updateShakeEffects(deltaTime);
+        if (typeof weaponSim.update === 'function') weaponSim.update(deltaTime);
+    }
 
     controls.update();
     renderer.render(scene, camera);

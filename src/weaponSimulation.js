@@ -11,6 +11,8 @@ function latLonToMeters(lat, lon, origin) {
     return { x, y };
 }
 
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
+
 export class Weapon {
     constructor(type, power, radius) {
         this.type = type; // e.g., 'bomb', 'missile', 'artillery'
@@ -63,7 +65,67 @@ export class WeaponSimulation {
         // Apply 3D effects to affected buildings
         this.apply3DEffects(weapon, lat, lon);
 
+        // Create visual explosion effects (2D ripple + initial 3D burst)
+        this.createExplosionVisuals(weapon, lat, lon);
+
         return impact;
+    }
+
+    // Create visuals for explosion: Leaflet ripple + Three.js glow/light/particles
+    createExplosionVisuals(weapon, lat, lon) {
+        // 2D Leaflet ripple: expanding circle that fades
+        try {
+            if (this.map) {
+                const center = [lat, lon];
+                const maxR = weapon.radius;
+                const ripple = L.circle(center, { radius: 0, color: '#ff5500', weight: 2, fill: false, opacity: 0.9 }).addTo(this.map);
+                const start = performance.now();
+                const life = 900; // ms
+                this.impacts[this.impacts.length - 1].ripple = { ripple, start, life, maxR };
+            }
+        } catch (e) { /* Leaflet may not be present in some contexts */ }
+
+        // 3D visuals: expanding emissive sphere + short-lived point light + quick particles
+        if (!this.scene) return;
+        try {
+            if (!this.scene.userData.explosions) this.scene.userData.explosions = [];
+            // compute impact position in world meters
+            const pos = latLonToMeters(lat, lon, this.origin);
+            // glow sphere
+            const geom = new THREE.SphereGeometry(1, 16, 12);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.9, depthWrite: false });
+            const glow = new THREE.Mesh(geom, mat);
+            glow.position.set(pos.x, pos.y, (getTerrainHeightAt ? getTerrainHeightAt(pos.x, pos.y) : 0) + 2);
+            glow.scale.set(0.01, 0.01, 0.01);
+            this.scene.add(glow);
+
+            // light flash
+            const light = new THREE.PointLight(0xffcc88, 2.5, weapon.radius * 1.5);
+            light.position.copy(glow.position);
+            this.scene.add(light);
+
+            // simple particle sprites (small triangles using Points)
+            const particlesGeo = new THREE.BufferGeometry();
+            const count = Math.min(64, Math.round(weapon.radius / 2));
+            const positions = new Float32Array(count * 3);
+            const velocities = [];
+            for (let i = 0; i < count; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const r = 0.1 + Math.random() * 0.5;
+                positions[i * 3 + 0] = pos.x + Math.cos(theta) * r;
+                positions[i * 3 + 1] = pos.y + Math.sin(theta) * r;
+                positions[i * 3 + 2] = glow.position.z + (Math.random() - 0.5) * 0.5;
+                velocities.push({ x: Math.cos(theta) * (0.5 + Math.random() * 2), y: Math.sin(theta) * (0.5 + Math.random() * 2), z: -0.2 + Math.random() * 0.4 });
+            }
+            particlesGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const partMat = new THREE.PointsMaterial({ color: 0xffcc66, size: 0.3, transparent: true, opacity: 0.95 });
+            const particles = new THREE.Points(particlesGeo, partMat);
+            this.scene.add(particles);
+
+            this.scene.userData.explosions.push({ glow, light, particles, velocities, age: 0, life: 1.2, maxScale: Math.max(weapon.radius * 0.02, 0.2) });
+        } catch (e) {
+            console.warn('Failed creating 3D explosion visuals', e);
+        }
     }
 
     apply3DEffects(weapon, lat, lon) {
@@ -72,13 +134,8 @@ export class WeaponSimulation {
             return;
         }
 
-        console.log('Applying 3D effects to', this.buildings.length, 'buildings');
-
         // Convert impact position to 3D coordinates
         const impactPos = latLonToMeters(lat, lon, this.origin);
-        console.log('Impact lat/lon:', lat, lon);
-        console.log('Impact position in 3D:', impactPos);
-        console.log('Origin used:', this.origin);
 
         let affectedCount = 0;
         this.buildings.forEach((building, index) => {
@@ -91,7 +148,6 @@ export class WeaponSimulation {
                 return;
             }
 
-            console.log('Building', index, 'bbox min:', bbox.min.x, bbox.min.y, 'max:', bbox.max.x, bbox.max.y);
             // Try a more robust test than centroid-only: check polygon footprint vs impact circle.
             // Build a list of base vertices (those near the geometry min Z) and compute convex hull.
             try {
@@ -203,28 +259,21 @@ export class WeaponSimulation {
                 console.warn('Error while testing building', index, e);
             }
         });
-
-        console.log('Affected buildings:', affectedCount);
     }
 
     damageBuilding(building, damage) {
-        console.log('Damaging building with damage:', damage);
         // Change color to red based on damage
         if (building.material) {
             const originalColor = building.material.color ? building.material.color.getHex() : 0xcccccc;
             building.userData.originalColor = originalColor;
             building.material.color.setHex(0xff0000); // Red for damage
             building.material.needsUpdate = true;
-            console.log('Building color changed to red');
-        } else {
-            console.log('Building has no material');
         }
 
         // Add slight shake effect
         building.userData.shake = true;
         building.userData.shakeIntensity = damage * 0.1;
         building.userData.shakeTime = 0;
-        console.log('Shake effect applied');
     }
 
     updateShakeEffects(deltaTime) {
@@ -241,6 +290,63 @@ export class WeaponSimulation {
                 }
             }
         });
+    }
+
+    // Update all visuals (ripples, 3D explosions)
+    update(deltaTime) {
+        // update ripple animations stored in impacts
+        const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+        for (let i = this.impacts.length - 1; i >= 0; i--) {
+            const item = this.impacts[i];
+            if (item.ripple) {
+                const t = (now - item.ripple.start) / item.ripple.life;
+                if (t >= 1) {
+                    try { this.map.removeLayer(item.ripple.ripple); } catch (e) { }
+                    delete item.ripple;
+                } else {
+                    const r = item.ripple.maxR * t;
+                    try { item.ripple.ripple.setRadius(r); item.ripple.ripple.setStyle({ opacity: Math.max(0.02, 0.9 * (1 - t)), weight: Math.max(1, 3 * (1 - t)) }); } catch (e) { }
+                }
+            }
+        }
+
+        // update 3D explosions
+        if (this.scene && this.scene.userData.explosions && this.scene.userData.explosions.length) {
+            const list = this.scene.userData.explosions;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const ex = list[i];
+                ex.age += deltaTime;
+                const t = ex.age / ex.life;
+                // glow expands and fades
+                const s = THREE.MathUtils.lerp(0.01, ex.maxScale, Math.min(1, t));
+                ex.glow.scale.set(s, s, s);
+                ex.glow.material.opacity = Math.max(0, 0.9 * (1 - t));
+                // light fades quickly
+                ex.light.intensity = Math.max(0, 2.5 * (1 - t));
+                // particles move outward and fade
+                try {
+                    const posAttr = ex.particles.geometry.attributes.position;
+                    for (let k = 0; k < ex.velocities.length; k++) {
+                        posAttr.array[k * 3 + 0] += ex.velocities[k].x * deltaTime;
+                        posAttr.array[k * 3 + 1] += ex.velocities[k].y * deltaTime;
+                        posAttr.array[k * 3 + 2] += ex.velocities[k].z * deltaTime;
+                        // gravity-ish
+                        ex.velocities[k].z -= 0.8 * deltaTime;
+                    }
+                    posAttr.needsUpdate = true;
+                    ex.particles.material.opacity = Math.max(0, 0.95 * (1 - t));
+                } catch (e) { /* ignore particle update errors */ }
+
+                if (ex.age >= ex.life) {
+                    try {
+                        this.scene.remove(ex.glow);
+                        this.scene.remove(ex.light);
+                        this.scene.remove(ex.particles);
+                    } catch (e) { }
+                    list.splice(i, 1);
+                }
+            }
+        }
     }
 
     clearImpacts() {
