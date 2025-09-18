@@ -52,68 +52,60 @@ function initMap() {
         isDrawing = false;
     });
     // If mouse leaves the map while drawing, cancel drawing and re-enable dragging
-    map.on('mouseout', (e) => {
-        if (!isDrawing) return;
-        isDrawing = false;
-        startPoint = null;
-        map.dragging.enable();
-        if (rect) { map.removeLayer(rect); rect = null; }
-    });
-}
+    }
 
 async function fetchOSM(bbox) {
     // bbox = south,west,north,east
     const [s, w, n, e] = bbox;
     // build query based on selected layers
     const wanted = [];
-    if (document.getElementById('cb_building').checked) {
+    if (document.getElementById('cb_building') && document.getElementById('cb_building').checked) {
         wanted.push('way["building"]');
         wanted.push('relation["building"]');
     }
-    if (document.getElementById('cb_road').checked) {
-        // highway ways
+    if (document.getElementById('cb_road') && document.getElementById('cb_road').checked) {
         wanted.push('way["highway"]');
     }
     // infrastructure
-    if (document.getElementById('cb_hospital').checked) {
+    if (document.getElementById('cb_hospital') && document.getElementById('cb_hospital').checked) {
         wanted.push('node["amenity"="hospital"]');
         wanted.push('way["amenity"="hospital"]');
         wanted.push('relation["amenity"="hospital"]');
     }
-    if (document.getElementById('cb_school').checked) {
+    if (document.getElementById('cb_school') && document.getElementById('cb_school').checked) {
         wanted.push('node["amenity"="school"]');
         wanted.push('way["amenity"="school"]');
         wanted.push('relation["amenity"="school"]');
     }
-    if (document.getElementById('cb_rail').checked) {
+    if (document.getElementById('cb_rail') && document.getElementById('cb_rail').checked) {
         wanted.push('way["railway"]');
         wanted.push('relation["railway"]');
     }
-    if (document.getElementById('cb_bus').checked) {
+    if (document.getElementById('cb_bus') && document.getElementById('cb_bus').checked) {
         wanted.push('node["highway"="bus_stop"]');
     }
-    if (document.getElementById('cb_power').checked) {
+    if (document.getElementById('cb_power') && document.getElementById('cb_power').checked) {
         wanted.push('way["power"]');
         wanted.push('node["power"]');
     }
-    if (document.getElementById('cb_parking').checked) {
+    if (document.getElementById('cb_parking') && document.getElementById('cb_parking').checked) {
         wanted.push('way["amenity"="parking"]');
         wanted.push('relation["amenity"="parking"]');
     }
-    if (document.getElementById('cb_industrial').checked) {
+    if (document.getElementById('cb_industrial') && document.getElementById('cb_industrial').checked) {
         wanted.push('way["landuse"="industrial"]');
         wanted.push('relation["landuse"="industrial"]');
     }
-    if (document.getElementById('cb_airport').checked) {
+    if (document.getElementById('cb_airport') && document.getElementById('cb_airport').checked) {
         wanted.push('way["aeroway"]');
         wanted.push('node["aeroway"="aerodrome"]');
         wanted.push('relation["aeroway"]');
     }
-    if (document.getElementById('cb_bridge').checked) {
+    if (document.getElementById('cb_bridge') && document.getElementById('cb_bridge').checked) {
         wanted.push('way["bridge"]');
         wanted.push('relation["bridge"]');
     }
-    if (document.getElementById('cb_lake').checked || document.getElementById('cb_river').checked) {
+    if ((document.getElementById('cb_lake') && document.getElementById('cb_lake').checked) || (document.getElementById('cb_river') && document.getElementById('cb_river').checked)) {
         // water features
         wanted.push('way["natural"="water"]');
         wanted.push('relation["natural"="water"]');
@@ -126,16 +118,15 @@ async function fetchOSM(bbox) {
         wanted.push('relation["type"="multipolygon"]["landuse"="reservoir"]');
     }
     // include hills if mountain checkbox is checked (some mapping uses 'hill')
-    if (document.getElementById('cb_mountain').checked) {
-        // (these will be added again below for nodes) but include ways/relations too
+    if (document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) {
         wanted.push('way["natural"="hill"]');
         wanted.push('relation["natural"="hill"]');
     }
-    if (document.getElementById('cb_park').checked) {
+    if (document.getElementById('cb_park') && document.getElementById('cb_park').checked) {
         wanted.push('way["leisure"="park"]');
         wanted.push('relation["leisure"="park"]');
     }
-    if (document.getElementById('cb_mountain').checked) {
+    if (document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) {
         // mountains/peaks as nodes
         wanted.push('node["natural"="peak"]');
         wanted.push('node["peak"="*"]');
@@ -285,28 +276,143 @@ function parseOSM(osm, bboxCenter) {
     return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes, infra: infraMeshes };
 }
 
-// --- Terrain / elevation support using OpenTopoData (SRTM)
+// --- Terrain / elevation support using OpenTopoData
 const VERT_SCALE = 0.5; // vertical exaggeration / scale for terrain and object heights
 let terrain = null; // THREE.Mesh
 let terrainGrid = null; // { nx, ny, lats[][], lons[][], heights[][], origin, dx, dy }
+let selectedDataset = 'srtm90m';
 
+// Fetch available OpenTopoData datasets and populate the UI selector
+async function loadOpenTopoDatasets() {
+    const fallback = [
+        'aster30m','bkg200m','emod2018','etopo1','eudem25m','gebco2020','mapzen','ned10m','nzdem8m','srtm30m','srtm90m','test-dataset'
+    ];
+    try {
+        const res = await fetch('https://api.opentopodata.org/datasets');
+        if (!res.ok) throw new Error('dataset list fetch failed');
+        const data = await res.json();
+        const sel = document.getElementById('datasetSelect');
+        if (!sel) return;
+        sel.innerHTML = '';
+        const list = Array.isArray(data.datasets) ? data.datasets : (Array.isArray(data.results) ? data.results : null);
+        if (list && list.length) {
+            for (const d of list) {
+                const name = d.name || d.dataset || d.id || d;
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name + (d.description ? ' — ' + d.description : '');
+                sel.appendChild(opt);
+            }
+        } else {
+            for (const name of fallback) { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt); }
+        }
+        const hasSrtm = Array.from(sel.options).some(o => (o.value || '').toLowerCase() === 'srtm90m');
+        sel.value = hasSrtm ? 'srtm90m' : (sel.options.length ? sel.options[0].value : fallback[0]);
+        selectedDataset = sel.value;
+        sel.addEventListener('change', () => { selectedDataset = sel.value; console.log('Selected dataset:', selectedDataset); });
+        return;
+    } catch (e) {
+        console.warn('Failed to load OpenTopo datasets', e);
+    }
+    const sel = document.getElementById('datasetSelect');
+    if (sel) {
+        sel.innerHTML = '';
+        for (const name of fallback) { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt); }
+        sel.value = fallback.includes('srtm90m') ? 'srtm90m' : fallback[0];
+        selectedDataset = sel.value;
+        sel.addEventListener('change', () => { selectedDataset = sel.value; console.log('Selected dataset:', selectedDataset); });
+    }
+}
+// Fetch elevations for an array of {lat,lon} points. Returns flat array of elevations matching input order.
 async function fetchElevationPoints(points) {
-    // points: array of {lat, lon}
-    // use OpenTopoData API (srtm90m) in batches of 100
     const out = [];
-    const batchSize = 100;
+    const batchSize = 100; // keep batches small to avoid long URLs
     for (let i = 0; i < points.length; i += batchSize) {
         const batch = points.slice(i, i + batchSize);
         const locs = batch.map(p => `${p.lat},${p.lon}`).join('|');
-        const url = `https://api.opentopodata.org/v1/srtm90m`;
-        // POST with form-encoded body as the API example suggests (avoid long GET URLs)
-        const body = new URLSearchParams();
-        body.append('locations', locs);
-        body.append('interpolation', 'cubic');
-        const res = await fetch(url, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-        if (!res.ok) throw new Error('Elevation fetch failed');
-        const data = await res.json();
-        for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
+        const isLocal = (typeof window !== 'undefined') && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
+        const base = isLocal ? `http://localhost:3000/opentopo` : `https://api.opentopodata.org/v1/${encodeURIComponent(selectedDataset)}`;
+
+        let data = null;
+        // Try GET for short queries
+        try {
+            const getUrl = isLocal
+                ? `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson&dataset=${encodeURIComponent(selectedDataset)}`
+                : `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson`;
+            if (getUrl.length < 2000) {
+                const gres = await fetch(getUrl);
+                if (gres.ok) {
+                    const ct = (gres.headers.get('content-type') || '').toLowerCase();
+                    if (ct.includes('application/geo+json') || ct.includes('geojson') || ct.includes('application/json')) {
+                        data = await gres.json();
+                    }
+                }
+            }
+        } catch (e) {
+            data = null;
+        }
+
+        if (!data) {
+            const body = new URLSearchParams();
+            body.append('locations', locs);
+            body.append('interpolation', 'cubic');
+            body.append('format', 'geojson');
+            if (isLocal) body.append('dataset', selectedDataset);
+            const pres = await fetch(base, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+            if (!pres.ok) throw new Error('Elevation fetch failed');
+            data = await pres.json();
+        }
+
+        // Parse response: support GeoJSON FeatureCollection (features[].properties.elevation) or results array
+        if (data && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+            // Build a map from rounded lat,lon to elevation so we can return points in the requested order
+            const map = new Map();
+            for (const f of data.features) {
+                let elev = null;
+                if (f.properties && typeof f.properties.elevation === 'number') elev = f.properties.elevation;
+                else if (f.geometry && Array.isArray(f.geometry.coordinates)) {
+                    const c = f.geometry.coordinates;
+                    if (typeof c[2] === 'number') elev = c[2];
+                    else if (Array.isArray(c[0]) && typeof c[0][2] === 'number') elev = c[0][2];
+                    // if geometry is a single point, coordinates might be [lon, lat, z]
+                    if (elev === null && typeof c[1] === 'number' && typeof c[0] === 'number' && typeof c[2] === 'number') elev = c[2];
+                }
+                // attempt to extract lat/lon to create a key
+                let lat = null, lon = null;
+                if (f.geometry && Array.isArray(f.geometry.coordinates)) {
+                    const c = f.geometry.coordinates;
+                    // coordinates could be [lon,lat,z] or nested
+                    if (typeof c[1] === 'number' && typeof c[0] === 'number') { lon = c[0]; lat = c[1]; }
+                    else if (Array.isArray(c[0]) && typeof c[0][1] === 'number') { lon = c[0][0]; lat = c[0][1]; }
+                }
+                if (lat !== null && lon !== null) {
+                    const key = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+                    map.set(key, elev === null ? 0 : elev);
+                }
+            }
+            // push elevations in the same order as the requested batch
+            for (const p of batch) {
+                const key = `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+                if (map.has(key)) out.push(map.get(key)); else out.push(0);
+            }
+        } else if (data && Array.isArray(data.results)) {
+            for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
+        } else {
+            // fallback: try to salvage numbers
+            if (data && typeof data === 'object') {
+                const vals = JSON.stringify(data).match(/-?\d+\.?\d*/g) || [];
+                for (const v of vals) out.push(parseFloat(v));
+            }
+        }
+
+        // diagnostic: check for abrupt large jumps in this batch
+        if (out.length >= batch.length) {
+            let jumps = 0; let last = out[out.length - batch.length];
+            for (let k = out.length - batch.length + 1; k < out.length; k++) {
+                const v = out[k]; if (Math.abs(v - last) > 1000) jumps++; last = v;
+            }
+            if (jumps > Math.max(1, Math.floor(batch.length / 10))) console.warn('Large elevation jumps detected in batch — possible ordering mismatch', { batchSize: batch.length, jumps });
+        }
     }
     return out;
 }
@@ -332,6 +438,21 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
         for (let i = 0; i < nx; i++) { heights[j][i] = heightsFlat[idx++] || 0; }
     }
 
+    // compute min/max for diagnostics and visualization scaling
+    let minH = Infinity, maxH = -Infinity;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const h = heights[j][i];
+        if (h < minH) minH = h;
+        if (h > maxH) maxH = h;
+    }
+    if (minH === Infinity) { minH = 0; maxH = 0; }
+    console.log('Terrain heights: min=', minH, 'max=', maxH);
+
+    // choose a visual vertical scale: if terrain is very flat, exaggerate for visibility
+    const delta = maxH - minH;
+    const extraScale = delta < 5 ? 10 : (delta < 20 ? 3 : 1);
+    const visualScale = VERT_SCALE * extraScale;
+
     // create geometry in local meters (origin = bbox center)
     const origin = { lat: (s + n) / 2, lon: (w + e) / 2 };
     // grid spacing in meters approximated by latLonToMeters delta
@@ -341,67 +462,109 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
     const dx = Math.abs(p10.x - p00.x);
     const dy = Math.abs(p01.y - p00.y);
 
-    // create PlaneGeometry with nx-1, ny-1 segments
-    const width = Math.abs(latLonToMeters(lats[0], lons[nx - 1], origin).x - p00.x);
-    const height = Math.abs(latLonToMeters(lats[ny - 1], lons[0], origin).y - p00.y);
-    const geom = new THREE.PlaneGeometry(width, height, nx - 1, ny - 1);
-    // PlaneGeometry is centered; we'll map heights to vertices
-    const vertices = geom.attributes.position;
-    // vertices order: (nx)*(ny) grid starting from -width/2,-height/2
-    let vi = 0;
+
+    // build BufferGeometry using real world X,Y positions (local meters relative to origin)
+    // positions: nx * ny vertices, each with x,y,z (z = (h - minH) * visualScale)
+    const positions = new Float32Array(nx * ny * 3);
+    const colors = new Float32Array(nx * ny * 3);
+    let pi = 0;
+    let cpi = 0;
+    // track minX/minY in local meters
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const xyGrid = new Array(ny);
     for (let j = 0; j < ny; j++) {
+        xyGrid[j] = new Array(nx);
         for (let i = 0; i < nx; i++) {
-            const vx = vertices.getX(vi);
-            const vy = vertices.getY(vi);
-            const hj = j;
-            const hi = i;
-            const h = heights[hj][hi];
-            vertices.setZ(vi, h * VERT_SCALE);
-            vi++;
+            const lat = lats[j], lon = lons[i];
+            const p = latLonToMeters(lat, lon, origin);
+            xyGrid[j][i] = { x: p.x, y: p.y };
+            if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+            const h = heights[j][i];
+            positions[pi++] = p.x; // X
+            positions[pi++] = p.y; // Y
+            positions[pi++] = (h - minH) * visualScale; // Z
+
+            // color
+            const t = Math.max(0, Math.min(1, (h + 50) / 1000));
+            const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
+            colors[cpi++] = r; colors[cpi++] = g; colors[cpi++] = b;
         }
     }
-    vertices.needsUpdate = true;
+
+    // compute grid spacings
+    const gridDx = (nx > 1) ? ((maxX - minX) / (nx - 1)) : dx;
+    const gridDy = (ny > 1) ? ((maxY - minY) / (ny - 1)) : dy;
+
+    // build index buffer (two triangles per cell)
+    const indices = [];
+    for (let j = 0; j < ny - 1; j++) {
+        for (let i = 0; i < nx - 1; i++) {
+            const a = j * nx + i;
+            const b = j * nx + (i + 1);
+            const c = (j + 1) * nx + i;
+            const d = (j + 1) * nx + (i + 1);
+            // two triangles: a, c, b and b, c, d
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+        }
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geom.setIndex(indices);
     geom.computeVertexNormals();
 
-    // color by height
-    const colors = [];
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-        const h = heights[j][i];
-        // simple gradient from green->brown->white
-        const t = Math.max(0, Math.min(1, (h + 50) / 1000));
-        const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
-        colors.push(r, g, b);
-    }
-    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    const wire = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true, opacity: 0.08, transparent: true, depthWrite: false });
     if (terrain) scene.remove(terrain);
     terrain = new THREE.Mesh(geom, mat);
-    terrain.rotateX(-Math.PI / 2); // plane to X-Y
-    terrain.position.set(0, 0, 0);
+    const wireMesh = new THREE.Mesh(geom.clone(), wire);
+    terrain.add(wireMesh);
     scene.add(terrain);
 
-    terrainGrid = { nx, ny, lats, lons, heights, origin, dx, dy, width, height };
+    terrainGrid = { nx, ny, lats, lons, heights, origin, dx: gridDx, dy: gridDy, minX, minY, minH, visualScale, xyGrid };
+
+    // diagnostic samples
+    const sample = (i, j) => ({ i, j, h: heights[j] && heights[j][i] });
+    console.log('Terrain samples:', sample(0,0), sample(nx-1,0), sample(0,ny-1), sample(nx-1,ny-1), sample(Math.floor(nx/2), Math.floor(ny/2)));
 }
 
 function getTerrainHeightAt(x, y) {
     // x,y are in local meters relative to origin used when building terrain
     if (!terrainGrid) return 0;
-    const { nx, ny, lats, lons, heights, origin, width, height } = terrainGrid;
-    // map x,y (centered plane) to i,j indices
-    const ix = ((x + width / 2) / width) * (nx - 1);
-    const jy = ((y + height / 2) / height) * (ny - 1);
-    const i0 = Math.floor(ix), j0 = Math.floor(jy);
-    const i1 = Math.min(nx - 1, i0 + 1), j1 = Math.min(ny - 1, j0 + 1);
+    const { nx, ny, heights, origin, minH = 0, visualScale = VERT_SCALE, minX, minY, dx: gridDx, dy: gridDy } = terrainGrid;
+    // prefer world-grid mapping (minX/minY present)
+    let ix = 0, jy = 0;
+    if (typeof minX === 'number' && typeof minY === 'number' && gridDx && gridDy) {
+        ix = (x - minX) / gridDx;
+        jy = (y - minY) / gridDy;
+    } else {
+        // fallback: approximate using origin and lat/lon arrays
+        // map x,y relative to origin into fractional indices
+        const rel = latLonToMeters(origin.lat, origin.lon, origin); // zero
+        ix = 0; jy = 0;
+    }
+    let i0 = Math.floor(ix), j0 = Math.floor(jy);
+    let i1 = i0 + 1, j1 = j0 + 1;
+    // clamp indices
+    if (i0 < 0) i0 = 0; if (j0 < 0) j0 = 0;
+    if (i1 < 0) i1 = 0; if (j1 < 0) j1 = 0;
+    if (i0 >= nx) i0 = nx - 1; if (i1 >= nx) i1 = nx - 1;
+    if (j0 >= ny) j0 = ny - 1; if (j1 >= ny) j1 = ny - 1;
     const sx = ix - i0, sy = jy - j0;
-    const h00 = (heights[j0] && heights[j0][i0]) || 0;
-    const h10 = (heights[j0] && heights[j0][i1]) || 0;
-    const h01 = (heights[j1] && heights[j1][i0]) || 0;
-    const h11 = (heights[j1] && heights[j1][i1]) || 0;
+    const row0 = heights[j0] || [];
+    const row1 = heights[j1] || [];
+    const h00 = (typeof row0[i0] === 'number') ? row0[i0] : 0;
+    const h10 = (typeof row0[i1] === 'number') ? row0[i1] : h00;
+    const h01 = (typeof row1[i0] === 'number') ? row1[i0] : h00;
+    const h11 = (typeof row1[i1] === 'number') ? row1[i1] : h00;
     const h0 = h00 * (1 - sx) + h10 * sx;
     const h1 = h01 * (1 - sx) + h11 * sx;
     const h = h0 * (1 - sy) + h1 * sy;
-    return h * VERT_SCALE; // same vertical scale used when building terrain
+    // convert to same vertical space as terrain mesh: (h - minH) * visualScale
+    return (h - minH) * visualScale;
 }
 
 function initThree() {
@@ -431,13 +594,7 @@ function initThree() {
     scene.add(dir);
 
     // ground (plane in XY so Z is height)
-    const ggeo = new THREE.PlaneGeometry(10000, 10000);
-    // darker ground so roads stand out
-    const gmat = new THREE.MeshLambertMaterial({ color: 0x444444 });
-    const ground = new THREE.Mesh(ggeo, gmat);
-    // leave unrotated so PlaneGeometry sits in X-Y plane (normal +Z)
-    ground.position.z = 0;
-    scene.add(ground);
+    // (ground plane removed per user request)
 
     // load building texture (if available in assets folder)
     const loader = new THREE.TextureLoader();
@@ -678,35 +835,97 @@ function addWaterToScene(waterMeshes) {
     for (const r of scene.userData.water) scene.remove(r);
     scene.userData.water = [];
     for (const w of waterMeshes) {
-        // If polygon (lake/reservoir)
+        // If polygon (lake/reservoir) - create a thin mesh that conforms to terrain by sampling height per vertex
         if (w.pts.length >= 3) {
-            const shape = new THREE.Shape();
-            w.pts.forEach((p, i) => { if (i === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y); });
-            // place water slightly below ground to avoid z-fighting and make shorelines visible
-            const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.4, bevelEnabled: false });
-            const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6, transparent: true, opacity: 0.85 });
-            const mesh = new THREE.Mesh(geom, mat);
-            // compute average terrain height under lake and place water slightly above lowest shoreline (or slightly below to avoid z-fighting)
-            let sum = 0, cnt = 0;
-            for (const p of w.pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { sum += h; cnt++; } }
-            const avg = cnt ? (sum / cnt) : 0;
-            mesh.position.z = avg - 0.1;
-            scene.add(mesh);
-            scene.userData.water.push(mesh);
+            // Build a geometry from the polygon vertices with Z sampled from terrain
+            const vertices = [];
+            for (const p of w.pts) {
+                const h = getTerrainHeightAt(p.x, p.y);
+                const z = isNaN(h) ? 0 : (h);
+                vertices.push(new THREE.Vector3(p.x, p.y, z));
+            }
+            // Triangulate the polygon in 2D (x,y) then apply Z from vertices
+            try {
+                // use Earcut via Shape for triangulation: create a flat shape and extract its triangulation
+                const shape = new THREE.Shape();
+                w.pts.forEach((p, i) => { if (i === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y); });
+                const geom2 = new THREE.ShapeGeometry(shape);
+                // replace the positions with our elevation-aware vertices
+                const posAttr = geom2.attributes.position;
+                for (let i = 0; i < posAttr.count; i++) {
+                    const vx = posAttr.getX(i), vy = posAttr.getY(i);
+                    // find matching vertex in original pts (use nearest)
+                    let nearestIdx = 0; let bestDist = Infinity;
+                    for (let j = 0; j < vertices.length; j++) {
+                        const dx = vx - vertices[j].x, dy = vy - vertices[j].y;
+                        const d = dx * dx + dy * dy;
+                        if (d < bestDist) { bestDist = d; nearestIdx = j; }
+                    }
+                    posAttr.setZ(i, vertices[nearestIdx].z - 0.02); // slightly below terrain to appear like water
+                }
+                geom2.attributes.position.needsUpdate = true;
+                // ensure correct normals
+                geom2.computeVertexNormals();
+                const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+                const mesh = new THREE.Mesh(geom2, mat);
+                mesh.renderOrder = 1;
+                scene.add(mesh);
+                scene.userData.water.push(mesh);
+            } catch (e) {
+                // fallback: render a flat extrude at average height
+                let sum = 0, cnt = 0;
+                for (const p of w.pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { sum += h; cnt++; } }
+                const avg = cnt ? (sum / cnt) : 0;
+                const shape = new THREE.Shape();
+                w.pts.forEach((p, i) => { if (i === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y); });
+                const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.01, bevelEnabled: false });
+                const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6, transparent: true, opacity: 0.85 });
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.position.z = avg - 0.02;
+                scene.add(mesh);
+                scene.userData.water.push(mesh);
+            }
+
         } else if (w.pts.length > 1) {
-            // polyline -> render as tube (river)
-            const path = new THREE.CurvePath();
-            const points = w.pts.map(p => new THREE.Vector3(p.x, p.y, 0));
-            // simple TubeGeometry using a CatmullRomCurve3
+            // polyline -> render as river that follows terrain by sampling centerline heights
+            const points = w.pts.map(p => {
+                const h = getTerrainHeightAt(p.x, p.y);
+                return new THREE.Vector3(p.x, p.y, isNaN(h) ? 0 : (h - 0.02));
+            });
+            // create a smooth curve and sample points along it
             const curve = new THREE.CatmullRomCurve3(points);
-            const tubeGeom = new THREE.TubeGeometry(curve, Math.max(2, points.length * 3), 1.2, 8, false);
-            const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6 });
-            const mesh = new THREE.Mesh(tubeGeom, mat);
-            // lower river slightly relative to terrain along its centerline
-            let sumr = 0, cntr = 0;
-            for (const p of w.pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { sumr += h; cntr++; } }
-            const avgr = cntr ? (sumr / cntr) : 0;
-            mesh.position.z = avgr - 0.05;
+            const divisions = Math.max( Math.floor(points.length * 4), 8 );
+            const sampled = curve.getPoints(divisions);
+            // create a ribbon-like geometry by offsetting left/right along the curve using Frenet frames
+            const leftPts = [], rightPts = [];
+            for (let i = 0; i < sampled.length; i++) {
+                const p = sampled[i];
+                // approximate tangent
+                const t = curve.getTangent(i / sampled.length).normalize();
+                // compute normal in XY plane
+                const nx = -t.y, ny = t.x;
+                const halfWidth = 1.0; // river half-width in meters (could be derived from tags)
+                leftPts.push(new THREE.Vector3(p.x + nx * halfWidth, p.y + ny * halfWidth, p.z));
+                rightPts.push(new THREE.Vector3(p.x - nx * halfWidth, p.y - ny * halfWidth, p.z));
+            }
+            // build geometry from leftPts + reversed rightPts
+            const riverGeom = new THREE.BufferGeometry();
+            const verts = [];
+            for (let i = 0; i < leftPts.length; i++) { verts.push(leftPts[i].x, leftPts[i].y, leftPts[i].z); }
+            for (let i = rightPts.length - 1; i >= 0; i--) { verts.push(rightPts[i].x, rightPts[i].y, rightPts[i].z); }
+            riverGeom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+            // simple triangulation by creating a single face strip
+            const idx = [];
+            const L = leftPts.length;
+            for (let i = 0; i < L - 1; i++) {
+                idx.push(i, i + 1, 2 * L - 1 - i);
+                idx.push(i + 1, 2 * L - 2 - i, 2 * L - 1 - i);
+            }
+            riverGeom.setIndex(idx);
+            riverGeom.computeVertexNormals();
+            const mat = new THREE.MeshLambertMaterial({ color: 0x3b99d6, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
+            const mesh = new THREE.Mesh(riverGeom, mat);
+            mesh.renderOrder = 1;
             scene.add(mesh);
             scene.userData.water.push(mesh);
         }
@@ -958,6 +1177,8 @@ let buildingTexture = null;
 // Wire UI
 initMap();
 initThree();
+// populate dataset selector once DOM/UI is ready
+loadOpenTopoDatasets();
 
 document.getElementById('scanBtn').addEventListener('click', async () => {
     if (!rect) { alert('Vui lòng chọn vùng trên bản đồ bằng cách nhấp-drag.'); return; }
