@@ -7,6 +7,8 @@
     <title>Map Look - Scan & 3D Explore</title>
     <!-- Tailwind CDN (Play CDN for quick prototype) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome for compact icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
     <style>
@@ -64,13 +66,38 @@
                 </div>
                 <div id="leftPanelBody">
                     <div class="mb-2">
-                        <button id="scanBtn" class="px-3 py-1 bg-blue-600 rounded">Quét khu vực</button>
-                        <button id="checkAll" class="px-2 py-1 bg-gray-700 rounded ml-2">Check All</button>
-                        <button id="uncheckAll" class="px-2 py-1 bg-gray-700 rounded ml-1">Uncheck All</button>
-                        <div class="mt-2">
-                            <button id="saveSessionBtn" class="px-2 py-1 bg-green-600 rounded mt-2">Lưu phiên</button>
-                            <button id="loadSessionBtn" class="px-2 py-1 bg-yellow-600 rounded mt-2 ml-2">Tải phiên</button>
-                            <button id="clearSessionBtn" class="px-2 py-1 bg-red-600 rounded mt-2 ml-2">Xóa phiên</button>
+                        <div class="flex items-center space-x-2">
+                            <!-- Prominent scan button -->
+                            <button id="scanBtn" class="w-10 h-10 flex items-center justify-center bg-blue-600 rounded text-white" title="Quét khu vực" aria-label="Quét khu vực">
+                                <i class="fas fa-search" aria-hidden="true"></i>
+                                <span class="sr-only">Quét khu vực</span>
+                            </button>
+                            <!-- Check/Uncheck grouped to the right -->
+                            <div class="flex items-center space-x-1 ml-1">
+                                <button id="checkAll" class="w-8 h-8 flex items-center justify-center bg-gray-700 rounded text-white" title="Check All" aria-label="Check All">
+                                    <i class="fas fa-check" aria-hidden="true"></i>
+                                    <span class="sr-only">Check All</span>
+                                </button>
+                                <button id="uncheckAll" class="w-8 h-8 flex items-center justify-center bg-gray-700 rounded text-white" title="Uncheck All" aria-label="Uncheck All">
+                                    <i class="fas fa-ban" aria-hidden="true"></i>
+                                    <span class="sr-only">Uncheck All</span>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Session controls row -->
+                        <div class="mt-2 flex items-center space-x-2">
+                            <button id="saveSessionBtn" class="w-8 h-8 flex items-center justify-center bg-green-600 rounded text-white" title="Lưu phiên" aria-label="Lưu phiên">
+                                <i class="fas fa-save" aria-hidden="true"></i>
+                                <span class="sr-only">Lưu phiên</span>
+                            </button>
+                            <button id="loadSessionBtn" class="w-8 h-8 flex items-center justify-center bg-yellow-600 rounded text-white" title="Tải phiên" aria-label="Tải phiên">
+                                <i class="fas fa-file-import" aria-hidden="true"></i>
+                                <span class="sr-only">Tải phiên</span>
+                            </button>
+                            <button id="clearSessionBtn" class="w-8 h-8 flex items-center justify-center bg-red-600 rounded text-white" title="Xóa phiên" aria-label="Xóa phiên">
+                                <i class="fas fa-trash" aria-hidden="true"></i>
+                                <span class="sr-only">Xóa phiên</span>
+                            </button>
                         </div>
                     </div>
                     <div class="mb-2">
@@ -116,7 +143,10 @@
                         <option value="missile">Tên lửa</option>
                         <option value="artillery">Pháo</option>
                     </select>
-                    <button id="clearImpactsBtn" class="px-3 py-1 bg-red-600 rounded">Xóa ảnh hưởng</button>
+                    <button id="clearImpactsBtn" class="w-8 h-8 flex items-center justify-center bg-red-600 rounded text-white" title="Xóa ảnh hưởng" aria-label="Xóa ảnh hưởng">
+                        <i class="fas fa-broom" aria-hidden="true"></i>
+                        <span class="sr-only">Xóa ảnh hưởng</span>
+                    </button>
                     <div class="text-xs text-gray-300 mt-1">Double-click trên bản đồ để giả lập</div>
                 </div>
             </div>
