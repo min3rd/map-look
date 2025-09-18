@@ -18,6 +18,7 @@ let scene, camera, renderer, controls;
 let lastParsed = null;
 let lastOrigin = null;
 let lastBBox = null;
+let lastGridSize = null;
 
 function initMap() {
     map = L.map('map').setView([21.028511, 105.804817], 16); // Hanoi default
@@ -74,10 +75,38 @@ function initMap() {
 function saveAppState() {
     try {
         const key = 'maplook_state_v1';
-        const state = { parsed: null, origin: null, bbox: null, impacts: [], camera: null };
+        const state = { parsed: null, origin: null, bbox: null, impacts: [], camera: null, terrainInfo: null };
         if (lastParsed) state.parsed = lastParsed;
         if (lastOrigin) state.origin = lastOrigin;
         if (lastBBox) state.bbox = lastBBox;
+        // persist terrain metadata so restore can rebuild terrain
+        if (lastBBox) {
+            state.terrainInfo = { bbox: lastBBox, gridSize: lastGridSize || 48, dataset: selectedDataset };
+        }
+        // persist full terrain grid if available so restore can avoid re-fetching elevations
+        try {
+            if (terrainGrid) {
+                // deep-copy minimal serializable terrainGrid
+                const tg = {
+                    nx: terrainGrid.nx,
+                    ny: terrainGrid.ny,
+                    lats: terrainGrid.lats,
+                    lons: terrainGrid.lons,
+                    heights: terrainGrid.heights,
+                    origin: terrainGrid.origin,
+                    dx: terrainGrid.dx,
+                    dy: terrainGrid.dy,
+                    minX: terrainGrid.minX,
+                    minY: terrainGrid.minY,
+                    minH: terrainGrid.minH,
+                    visualScale: terrainGrid.visualScale,
+                    // include bbox and dataset meta so restore knows original params
+                    bbox: lastBBox || null,
+                    dataset: selectedDataset || null
+                };
+                state.terrainGrid = tg;
+            }
+        } catch (e) { console.warn('Failed to include terrainGrid in saved state', e); }
         // save camera and controls target if available
         try {
             if (camera) {
@@ -115,11 +144,21 @@ function loadAppState() {
                 lastOrigin = st.origin || lastOrigin;
                 lastBBox = st.bbox || lastBBox;
 
-                // If we have a bbox saved, rebuild terrain first (so buildings are placed correctly)
-                if (lastBBox && typeof buildTerrainForBBox === 'function') {
-                    try {
-                        await buildTerrainForBBox(lastBBox, 48, (lastParsed && lastParsed.water) ? lastParsed.water : null);
-                    } catch (e) { console.warn('Failed to rebuild terrain during restore', e); }
+                // If a saved terrainGrid is present, restore directly from it (no API calls)
+                if (st.terrainGrid) {
+                    const ok = restoreTerrainFromGrid(st.terrainGrid);
+                    if (!ok) console.warn('restoreTerrainFromGrid failed, falling back to buildTerrainForBBox');
+                } else {
+                    // If we have terrainInfo saved, rebuild terrain first (so buildings are placed correctly)
+                    const tinfo = st.terrainInfo || (lastBBox ? { bbox: lastBBox, gridSize: 48, dataset: selectedDataset } : null);
+                    if (tinfo && tinfo.bbox && typeof buildTerrainForBBox === 'function') {
+                        try {
+                            const prevDataset = selectedDataset;
+                            if (tinfo.dataset) selectedDataset = tinfo.dataset;
+                            await buildTerrainForBBox(tinfo.bbox, tinfo.gridSize || 48, (lastParsed && lastParsed.water) ? lastParsed.water : null);
+                            selectedDataset = prevDataset;
+                        } catch (e) { console.warn('Failed to rebuild terrain during restore', e); }
+                    }
                 }
 
                 // add scene objects after terrain is available
@@ -717,6 +756,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
     // bbox = [south, west, north, east]
     const [s, w, n, e] = bbox;
     const nx = gridSize, ny = gridSize;
+    try { lastBBox = bbox; lastGridSize = gridSize; } catch (e) {}
     const lats = new Array(ny);
     const lons = new Array(nx);
     for (let j = 0; j < ny; j++) lats[j] = s + (n - s) * (j / (ny - 1));
@@ -997,6 +1037,68 @@ function getTerrainHeightAt(x, y) {
     const h = h0 * (1 - sy) + h1 * sy;
     // convert to same vertical space as terrain mesh: (h - minH) * visualScale
     return (h - minH) * visualScale;
+}
+
+// Restore a terrain mesh directly from a saved terrainGrid object (no API calls)
+function restoreTerrainFromGrid(tg) {
+    try {
+        if (!tg || !Array.isArray(tg.heights) || !tg.nx || !tg.ny) return false;
+        const nx = tg.nx, ny = tg.ny;
+        const lats = tg.lats, lons = tg.lons, heights = tg.heights;
+        const origin = tg.origin || { lat: (lats[0] + lats[ny - 1]) / 2, lon: (lons[0] + lons[nx - 1]) / 2 };
+        const minH = (typeof tg.minH === 'number') ? tg.minH : (function() { let m=Infinity; for (let j=0;j<ny;j++) for (let i=0;i<nx;i++) if (typeof heights[j][i]==='number' && heights[j][i]<m) m=heights[j][i]; return (m===Infinity?0:m); })();
+        const visualScale = tg.visualScale || VERT_SCALE;
+
+        // compute xy grid
+        const xyGrid = new Array(ny);
+        for (let j = 0; j < ny; j++) { xyGrid[j] = new Array(nx); for (let i = 0; i < nx; i++) { const pxy = latLonToMeters(lats[j], lons[i], origin); xyGrid[j][i] = { x: pxy.x, y: pxy.y }; } }
+
+        // compute min/max and grid spacing
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const p = xyGrid[j][i]; if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y; }
+        const p00 = xyGrid[0][0]; const p10 = xyGrid[0][Math.min(1, nx-1)]; const p01 = xyGrid[Math.min(1, ny-1)][0];
+        const gridDx = Math.abs(p10.x - p00.x) || (tg.dx || 1);
+        const gridDy = Math.abs(p01.y - p00.y) || (tg.dy || 1);
+
+        // build positions/colors
+        const positions = new Float32Array(nx * ny * 3);
+        const colors = new Float32Array(nx * ny * 3);
+        let pi = 0, cpi = 0;
+        for (let j = 0; j < ny; j++) {
+            for (let i = 0; i < nx; i++) {
+                const p = xyGrid[j][i];
+                const h = (heights[j] && typeof heights[j][i] === 'number') ? heights[j][i] : minH;
+                positions[pi++] = p.x; positions[pi++] = p.y; positions[pi++] = (h - minH) * visualScale;
+                // simple color mapping
+                const t = Math.max(0, Math.min(1, (h + 50) / 1000));
+                const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
+                colors[cpi++] = r; colors[cpi++] = g; colors[cpi++] = b;
+            }
+        }
+
+        // index buffer
+        const indices = [];
+        for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+            const a = j * nx + i; const b = j * nx + (i + 1); const c = (j + 1) * nx + i; const d = (j + 1) * nx + (i + 1);
+            indices.push(a, c, b); indices.push(b, c, d);
+        }
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+        const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+        const wire = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true, opacity: 0.08, transparent: true, depthWrite: false });
+        if (terrain) scene.remove(terrain);
+        terrain = new THREE.Mesh(geom, mat);
+        const wireMesh = new THREE.Mesh(geom.clone(), wire);
+        terrain.add(wireMesh);
+        scene.add(terrain);
+
+        terrainGrid = { nx, ny, lats, lons, heights, origin, dx: gridDx, dy: gridDy, minX, minY, minH, visualScale, xyGrid };
+        return true;
+    } catch (e) { console.warn('restoreTerrainFromGrid failed', e); return false; }
 }
 
 // Robust sampler: raycast down onto the terrain mesh to get exact surface Z (world units)
@@ -1722,6 +1824,8 @@ if (clearSessionBtn) clearSessionBtn.addEventListener('click', () => {
     // also clear current scene objects
     try { weaponSim.clearImpacts(); } catch (e) {}
     try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) {}
+    // remove terrain from scene and clear terrainGrid
+    try { if (terrain) { scene.remove(terrain); terrain = null; } terrainGrid = null; lastBBox = null; lastGridSize = null; } catch (e) {}
     showToast('Phiên đã bị xóa.', 'success');
 });
 
