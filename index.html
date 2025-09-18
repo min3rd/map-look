@@ -57,54 +57,76 @@
                     <div class="text-white">Đang quét khu vực...</div>
                 </div>
             </div>
-            <div class="absolute top-2 left-2 bg-black/50 p-2 rounded">
-                <div class="mb-2">
-                    <button id="scanBtn" class="px-3 py-1 bg-blue-600 rounded">Quét khu vực</button>
-                    <button id="checkAll" class="px-2 py-1 bg-gray-700 rounded ml-2">Check All</button>
-                    <button id="uncheckAll" class="px-2 py-1 bg-gray-700 rounded ml-1">Uncheck All</button>
+            <div id="leftPanel" class="absolute top-2 left-2 bg-black/50 p-2 rounded">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="font-semibold text-gray-200">Controls</div>
+                    <button id="leftPanelToggle" class="px-2 py-0.5 bg-gray-700 rounded text-sm">▾</button>
                 </div>
-                <div class="mb-2">
-                    <label class="block text-xs text-gray-300">Dataset elevation (OpenTopoData)</label>
-                    <select id="datasetSelect" class="w-full bg-gray-800 text-white text-sm p-1 rounded">
-                        <option value="srtm90m">srtm90m (default)</option>
-                    </select>
-                </div>
-                <div id="controlsPanel" class="text-sm">
-                    <div class="font-semibold text-gray-200 mb-1">Hiển thị trên 3D</div>
-                    <label class="block"><input type="checkbox" id="cb_building" checked> Tòa nhà</label>
-                    <label class="block"><input type="checkbox" id="cb_road" checked> Đường</label>
-                    <label class="block"><input type="checkbox" id="cb_forest"> Rừng / Cây</label>
-                    <label class="block"><input type="checkbox" id="cb_lake" checked> Hồ</label>
-                    <label class="block"><input type="checkbox" id="cb_river" checked> Sông</label>
-                    <label class="block"><input type="checkbox" id="cb_mountain" checked> Núi</label>
-                    <label class="block"><input type="checkbox" id="cb_park" checked> Công viên</label>
-                    <div class="mt-2 font-semibold text-gray-200">Cơ sở hạ tầng</div>
-                    <label class="block"><input type="checkbox" id="cb_hospital"> Bệnh viện</label>
-                    <label class="block"><input type="checkbox" id="cb_school"> Trường học</label>
-                    <label class="block"><input type="checkbox" id="cb_rail"> Đường sắt</label>
-                    <label class="block"><input type="checkbox" id="cb_bus"> Trạm bus</label>
-                    <label class="block"><input type="checkbox" id="cb_power"> Lưới điện / trạm</label>
-                    <label class="block"><input type="checkbox" id="cb_parking"> Bãi đậu xe</label>
-                    <label class="block"><input type="checkbox" id="cb_industrial"> Khu công nghiệp</label>
-                    <label class="block"><input type="checkbox" id="cb_port"> Cảng / Bến tàu</label>
-                    <label class="block"><input type="checkbox" id="cb_airport"> Sân bay</label>
-                    <label class="block"><input type="checkbox" id="cb_bridge"> Cầu</label>
+                <div id="leftPanelBody">
+                    <div class="mb-2">
+                        <button id="scanBtn" class="px-3 py-1 bg-blue-600 rounded">Quét khu vực</button>
+                        <button id="checkAll" class="px-2 py-1 bg-gray-700 rounded ml-2">Check All</button>
+                        <button id="uncheckAll" class="px-2 py-1 bg-gray-700 rounded ml-1">Uncheck All</button>
+                        <div class="mt-2">
+                            <button id="saveSessionBtn" class="px-2 py-1 bg-green-600 rounded mt-2">Lưu phiên</button>
+                            <button id="loadSessionBtn" class="px-2 py-1 bg-yellow-600 rounded mt-2 ml-2">Tải phiên</button>
+                            <button id="clearSessionBtn" class="px-2 py-1 bg-red-600 rounded mt-2 ml-2">Xóa phiên</button>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="block text-xs text-gray-300">Dataset elevation (OpenTopoData)</label>
+                        <select id="datasetSelect" class="w-full bg-gray-800 text-white text-sm p-1 rounded">
+                            <option value="srtm90m">srtm90m (default)</option>
+                        </select>
+                    </div>
+                    <div id="controlsPanel" class="text-sm">
+                        <div class="font-semibold text-gray-200 mb-1">Hiển thị trên 3D</div>
+                        <label class="block"><input type="checkbox" id="cb_building" checked> Tòa nhà</label>
+                        <label class="block"><input type="checkbox" id="cb_road" checked> Đường</label>
+                        <label class="block"><input type="checkbox" id="cb_forest"> Rừng / Cây</label>
+                        <label class="block"><input type="checkbox" id="cb_lake" checked> Hồ</label>
+                        <label class="block"><input type="checkbox" id="cb_river" checked> Sông</label>
+                        <label class="block"><input type="checkbox" id="cb_mountain" checked> Núi</label>
+                        <label class="block"><input type="checkbox" id="cb_park" checked> Công viên</label>
+                        <div class="mt-2 font-semibold text-gray-200">Cơ sở hạ tầng</div>
+                        <label class="block"><input type="checkbox" id="cb_hospital"> Bệnh viện</label>
+                        <label class="block"><input type="checkbox" id="cb_school"> Trường học</label>
+                        <label class="block"><input type="checkbox" id="cb_rail"> Đường sắt</label>
+                        <label class="block"><input type="checkbox" id="cb_bus"> Trạm bus</label>
+                        <label class="block"><input type="checkbox" id="cb_power"> Lưới điện / trạm</label>
+                        <label class="block"><input type="checkbox" id="cb_parking"> Bãi đậu xe</label>
+                        <label class="block"><input type="checkbox" id="cb_industrial"> Khu công nghiệp</label>
+                        <label class="block"><input type="checkbox" id="cb_port"> Cảng / Bến tàu</label>
+                        <label class="block"><input type="checkbox" id="cb_airport"> Sân bay</label>
+                        <label class="block"><input type="checkbox" id="cb_bridge"> Cầu</label>
+                    </div>
                 </div>
             </div>
-            <div class="absolute top-2 right-2 bg-black/50 p-2 rounded">
-                <div class="mb-2 font-semibold text-gray-200">Giả lập vũ khí</div>
-                <select id="weaponSelect" class="w-full bg-gray-800 text-white text-sm p-1 rounded mb-2">
-                    <option value="bomb">Bom</option>
-                    <option value="missile">Tên lửa</option>
-                    <option value="artillery">Pháo</option>
-                </select>
-                <button id="clearImpactsBtn" class="px-3 py-1 bg-red-600 rounded">Xóa ảnh hưởng</button>
-                <div class="text-xs text-gray-300 mt-1">Double-click trên bản đồ để giả lập</div>
+            <div id="restoreOverlay" class="hidden absolute inset-0 flex items-center justify-center bg-black/70 z-60">
+                <div class="text-white text-lg bg-black/60 p-4 rounded">Đang phục hồi phiên làm việc...</div>
+            </div>
+            <div id="weaponPanel" class="absolute top-2 right-2 bg-black/50 p-2 rounded">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="mb-0 font-semibold text-gray-200">Giả lập vũ khí</div>
+                    <button id="weaponPanelToggle" class="px-2 py-0.5 bg-gray-700 rounded text-sm">▾</button>
+                </div>
+                <div id="weaponPanelBody">
+                    <select id="weaponSelect" class="w-full bg-gray-800 text-white text-sm p-1 rounded mb-2">
+                        <option value="bomb">Bom</option>
+                        <option value="missile">Tên lửa</option>
+                        <option value="artillery">Pháo</option>
+                    </select>
+                    <button id="clearImpactsBtn" class="px-3 py-1 bg-red-600 rounded">Xóa ảnh hưởng</button>
+                    <div class="text-xs text-gray-300 mt-1">Double-click trên bản đồ để giả lập</div>
+                </div>
             </div>
             <div class="absolute bottom-2 left-2 text-sm text-gray-300 p-2 bg-black/40 rounded">Giữ <strong>Shift</strong> và nhấp-drag trên bản đồ để
                 chọn vùng; kéo thả bình thường để di chuyển/zoom bản đồ. Sau đó nhấn "Quét khu vực"</div>
         </div>
     </div>
+
+            <!-- Toast container for unobtrusive notifications -->
+            <div id="toastContainer" class="fixed top-4 right-4 z-60 flex flex-col items-end space-y-2 pointer-events-none"></div>
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>

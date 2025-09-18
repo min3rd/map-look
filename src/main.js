@@ -17,6 +17,7 @@ let buildings = [];
 let scene, camera, renderer, controls;
 let lastParsed = null;
 let lastOrigin = null;
+let lastBBox = null;
 
 function initMap() {
     map = L.map('map').setView([21.028511, 105.804817], 16); // Hanoi default
@@ -73,9 +74,16 @@ function initMap() {
 function saveAppState() {
     try {
         const key = 'maplook_state_v1';
-        const state = { parsed: null, origin: null, impacts: [] };
+        const state = { parsed: null, origin: null, bbox: null, impacts: [], camera: null };
         if (lastParsed) state.parsed = lastParsed;
         if (lastOrigin) state.origin = lastOrigin;
+        if (lastBBox) state.bbox = lastBBox;
+        // save camera and controls target if available
+        try {
+            if (camera) {
+                state.camera = { pos: camera.position.toArray(), target: controls ? [controls.target.x, controls.target.y, controls.target.z] : [0,0,0] };
+            }
+        } catch (e) { }
         // serialize impacts (weapon type, lat, lon)
         if (weaponSim && Array.isArray(weaponSim.impacts)) {
             for (const imp of weaponSim.impacts) {
@@ -96,60 +104,92 @@ function loadAppState() {
         if (!txt) return;
         const state = JSON.parse(txt);
         if (!state) return;
-        // restore parsed scene if available
-        if (state.parsed) {
-            lastParsed = state.parsed;
-            lastOrigin = state.origin || lastOrigin;
-            // add buildings, roads, parks etc if present - follow same add* functions
-            if (lastParsed.buildings && document.getElementById('cb_building') && document.getElementById('cb_building').checked) addBuildingsToScene(lastParsed.buildings);
-            if (lastParsed.roads && document.getElementById('cb_road') && document.getElementById('cb_road').checked) addRoadsToScene(lastParsed.roads);
-            if (lastParsed.parks && document.getElementById('cb_park') && document.getElementById('cb_park').checked) addParksToScene(lastParsed.parks);
-            if (lastParsed.peaks && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addPeaksToScene(lastParsed.peaks);
-            if (lastParsed.hills && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addHillsToScene(lastParsed.hills);
-            if (lastParsed.forests && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addForestsToScene(lastParsed.forests);
-            if (lastParsed.trees && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addTreesToScene(lastParsed.trees);
-            if (lastParsed.ports && document.getElementById('cb_port') && document.getElementById('cb_port').checked) addPortsToScene(lastParsed.ports);
-            // infra
-            if (lastParsed.infra) addInfraToScene(lastParsed.infra);
-            // set weaponSim fields
-            weaponSim.buildings = buildings;
-            weaponSim.scene = scene;
-            if (lastOrigin) weaponSim.origin = lastOrigin;
 
-            // If buildingTexture already loaded earlier, apply it to restored buildings
-            if (typeof buildingTexture !== 'undefined' && buildingTexture) {
-                for (const b of buildings) {
-                    try {
-                        const t = buildingTexture.clone();
-                        t.needsUpdate = true;
-                        if (b && b.material) { b.material.map = t; b.material.needsUpdate = true; }
-                    } catch (e) { }
-                }
-            }
-
-            // Ensure the scene has at least basic lighting (in case restore ran before initThree finished)
+        // perform restore asynchronously so we can await terrain build
+    async function restoreFromState(st) {
             try {
-                const hasLight = scene.children.some(ch => ch.isLight || (ch.type && /Light$/.test(ch.type)));
-                if (!hasLight) {
-                    const hemiDef = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
-                    hemiDef.position.set(0, 200, 0);
-                    scene.add(hemiDef);
-                    const dirDef = new THREE.DirectionalLight(0xffffff, 0.8);
-                    dirDef.position.set(-100, 100, 100);
-                    scene.add(dirDef);
+                if (!st.parsed) return;
+        // show overlay
+        try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.remove('hidden'); } catch (e) {}
+                lastParsed = st.parsed;
+                lastOrigin = st.origin || lastOrigin;
+                lastBBox = st.bbox || lastBBox;
+
+                // If we have a bbox saved, rebuild terrain first (so buildings are placed correctly)
+                if (lastBBox && typeof buildTerrainForBBox === 'function') {
+                    try {
+                        await buildTerrainForBBox(lastBBox, 48, (lastParsed && lastParsed.water) ? lastParsed.water : null);
+                    } catch (e) { console.warn('Failed to rebuild terrain during restore', e); }
                 }
-            } catch (e) { /* ignore if THREE not available */ }
-        }
-        // restore impacts
-        if (Array.isArray(state.impacts) && state.impacts.length) {
-            for (const imp of state.impacts) {
+
+                // add scene objects after terrain is available
+                if (lastParsed.buildings && document.getElementById('cb_building') && document.getElementById('cb_building').checked) addBuildingsToScene(lastParsed.buildings);
+                if (lastParsed.roads && document.getElementById('cb_road') && document.getElementById('cb_road').checked) addRoadsToScene(lastParsed.roads);
+                if (lastParsed.parks && document.getElementById('cb_park') && document.getElementById('cb_park').checked) addParksToScene(lastParsed.parks);
+                if (lastParsed.peaks && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addPeaksToScene(lastParsed.peaks);
+                if (lastParsed.hills && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addHillsToScene(lastParsed.hills);
+                if (lastParsed.forests && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addForestsToScene(lastParsed.forests);
+                if (lastParsed.trees && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addTreesToScene(lastParsed.trees);
+                if (lastParsed.ports && document.getElementById('cb_port') && document.getElementById('cb_port').checked) addPortsToScene(lastParsed.ports);
+                if (lastParsed.infra) addInfraToScene(lastParsed.infra);
+
+                // set weaponSim fields
+                weaponSim.buildings = buildings;
+                weaponSim.scene = scene;
+                if (lastOrigin) weaponSim.origin = lastOrigin;
+
+                // apply texture if already loaded
+                if (typeof buildingTexture !== 'undefined' && buildingTexture) {
+                    for (const b of buildings) {
+                        try {
+                            const t = buildingTexture.clone();
+                            t.needsUpdate = true;
+                            if (b && b.material) { b.material.map = t; b.material.needsUpdate = true; }
+                        } catch (e) { }
+                    }
+                }
+
+                // ensure lights exist
                 try {
-                    const w = WEAPONS[imp.weapon] || WEAPONS.bomb;
-                    // re-run impacts to recreate visuals and damage
-                    weaponSim.simulateImpact(w, imp.lat, imp.lon);
-                } catch (e) { console.warn('Failed restoring impact', e); }
-            }
+                    const hasLight = scene.children.some(ch => ch.isLight || (ch.type && /Light$/.test(ch.type)));
+                    if (!hasLight) {
+                        const hemiDef = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+                        hemiDef.position.set(0, 200, 0);
+                        scene.add(hemiDef);
+                        const dirDef = new THREE.DirectionalLight(0xffffff, 0.8);
+                        dirDef.position.set(-100, 100, 100);
+                        scene.add(dirDef);
+                    }
+                } catch (e) { }
+
+                // restore impacts after scene ready
+                if (Array.isArray(st.impacts) && st.impacts.length) {
+                    for (const imp of st.impacts) {
+                        try {
+                            const w = WEAPONS[imp.weapon] || WEAPONS.bomb;
+                            weaponSim.simulateImpact(w, imp.lat, imp.lon);
+                        } catch (e) { console.warn('Failed restoring impact', e); }
+                    }
+                }
+
+                // restore camera if saved
+                try {
+                    if (st.camera && camera) {
+                        camera.position.fromArray(st.camera.pos);
+                        if (controls && st.camera.target) {
+                            controls.target.set(st.camera.target[0], st.camera.target[1], st.camera.target[2]);
+                            controls.update();
+                        }
+                    }
+                } catch (e) { console.warn('Failed restoring camera', e); }
+
+                // hide overlay
+                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) {}
+            } catch (e) { console.warn('restoreFromState error', e); }
         }
+
+        // kick off async restore but don't block startup
+        restoreFromState(state);
     } catch (e) { console.warn('Failed to load saved state', e); }
 }
 
@@ -1565,7 +1605,7 @@ initThree();
 loadOpenTopoDatasets();
 
 document.getElementById('scanBtn').addEventListener('click', async () => {
-    if (!rect) { alert('Vui lòng chọn vùng trên bản đồ bằng cách nhấp-drag.'); return; }
+    if (!rect) { showToast('Vui lòng chọn vùng trên bản đồ bằng cách nhấp-drag.', 'error'); return; }
     const b = rect.getBounds();
     const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
     const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
@@ -1625,15 +1665,15 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         }
     } catch (err) {
         console.error(err);
-        alert('Lỗi khi lấy dữ liệu OSM');
+        showToast('Lỗi khi lấy dữ liệu OSM', 'error');
     } finally {
         showLoader(false);
             try { saveAppState(); } catch (err) { console.warn('saveAppState failed after scan', err); }
     }
 });
 
-// restore any saved state after initializing map and three
-loadAppState();
+// Auto-restore on startup disabled. Users can restore using the "Tải phiên" button.
+console.info('Auto-restore disabled: use the Load Session button to restore saved sessions.');
 
 // enter 3D: center camera on selection
 // (enter3D removed - flight/ptr-lock controls disabled per user request)
@@ -1654,5 +1694,85 @@ if (uncheckAllBtn) uncheckAllBtn.addEventListener('click', () => setAllControls(
 document.getElementById('clearImpactsBtn').addEventListener('click', () => {
     weaponSim.clearImpacts();
 });
+
+// Panel toggle helpers
+function togglePanel(buttonId, bodyId) {
+    const btn = document.getElementById(buttonId);
+    const body = document.getElementById(bodyId);
+    if (!btn || !body) return;
+    btn.addEventListener('click', () => {
+        const closed = body.classList.toggle('hidden');
+        btn.textContent = closed ? '▸' : '▾';
+    });
+}
+
+// initialize panel toggles (left and weapon panels)
+togglePanel('leftPanelToggle', 'leftPanelBody');
+togglePanel('weaponPanelToggle', 'weaponPanelBody');
+
+// Session buttons added to UI
+const saveSessionBtn = document.getElementById('saveSessionBtn');
+const loadSessionBtn = document.getElementById('loadSessionBtn');
+const clearSessionBtn = document.getElementById('clearSessionBtn');
+if (saveSessionBtn) saveSessionBtn.addEventListener('click', () => { saveAppState(); showToast('Phiên đã được lưu.', 'success'); });
+if (loadSessionBtn) loadSessionBtn.addEventListener('click', () => { loadAppState(); showToast('Đang tải phiên (xem console để biết trạng thái).', 'info', 4000); });
+if (clearSessionBtn) clearSessionBtn.addEventListener('click', () => {
+    const key = 'maplook_state_v1';
+    localStorage.removeItem(key);
+    // also clear current scene objects
+    try { weaponSim.clearImpacts(); } catch (e) {}
+    try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) {}
+    showToast('Phiên đã bị xóa.', 'success');
+});
+
+// Simple toast helper
+function showToast(message, type = 'info', duration = 3000) {
+    try {
+        const container = document.getElementById('toastContainer');
+        if (!container) {
+            console.warn('Toast container not found, fallback to alert');
+            alert(message);
+            return;
+        }
+        const toast = document.createElement('div');
+        toast.className = 'max-w-xs w-full pointer-events-auto rounded px-3 py-2 text-sm shadow-lg flex items-center space-x-2';
+        let bg = 'bg-gray-800 text-white';
+        if (type === 'success') bg = 'bg-green-600 text-white';
+        if (type === 'error') bg = 'bg-red-600 text-white';
+        if (type === 'info') bg = 'bg-blue-600 text-white';
+        toast.className += ' ' + bg;
+        toast.style.opacity = '0';
+        toast.style.transition = 'transform 200ms ease, opacity 200ms ease';
+        toast.style.transform = 'translateY(-6px)';
+
+        const text = document.createElement('div');
+        text.textContent = message;
+        toast.appendChild(text);
+
+        container.appendChild(toast);
+
+        // animate in
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0)';
+        });
+
+        const timeout = setTimeout(() => {
+            // animate out
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-6px)';
+            setTimeout(() => { container.removeChild(toast); }, 220);
+        }, duration);
+
+        // allow click to dismiss early
+        toast.addEventListener('click', () => {
+            clearTimeout(timeout);
+            try { toast.remove(); } catch (e) {}
+        });
+    } catch (e) {
+        console.error('showToast failed', e);
+        try { alert(message); } catch (e2) {}
+    }
+}
 
 export { };
