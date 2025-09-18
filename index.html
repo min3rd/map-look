@@ -53,6 +53,10 @@
         .collapsed {
             padding-bottom: 6px;
         }
+    /* Constrain uploaded image preview so it doesn't cover the viewer */
+    #uploadPreviewContainer { max-width: 220px; max-height: 140px; overflow: hidden; z-index: 10; }
+    #uploadPreviewImg { display: block; max-width: 220px; max-height: 140px; width: auto; height: auto; }
+    .preview-img { width: 100%; height: 100%; object-fit: cover; display: block; }
     </style>
     <script type="importmap">
     {
@@ -84,6 +88,23 @@
                     <button id="leftPanelToggle" class="px-2 py-0.5 bg-gray-700 rounded text-sm">▾</button>
                 </div>
                 <div id="leftPanelBody">
+                        <div class="mb-2">
+                            <div class="font-semibold text-gray-200 mb-1">Tạo 3D từ ảnh vệ tinh</div>
+                            <input id="imageUpload" type="file" accept="image/*" class="block w-full text-sm text-gray-200 bg-gray-800 p-1 rounded mb-1" />
+                            <div class="flex space-x-2">
+                                <button id="uploadPreviewBtn" class="flex-1 bg-indigo-600 text-white p-1 rounded text-sm">Xem trước</button>
+                                <button id="generate3DBtn" class="flex-1 bg-teal-600 text-white p-1 rounded text-sm">Dựng 3D</button>
+                            </div>
+                            <div id="uploadPreviewContainer" class="mt-2 hidden">
+                                <div class="text-xs text-gray-300">Preview:</div>
+                                <img id="uploadPreviewImg" src="" alt="preview" class="mt-1 rounded shadow preview-img" />
+                            </div>
+                            <div class="mt-2 text-xs text-gray-300">Orchard: Server-side depth</div>
+                            <div class="flex space-x-2 mt-1">
+                                <label class="flex items-center space-x-2 text-sm"><input id="useServerDepth" type="checkbox"> <span>Use server depth API</span></label>
+                                <button id="runServerDepthBtn" class="bg-purple-600 text-white p-1 rounded text-sm">Run Server Depth</button>
+                            </div>
+                        </div>
                     <div class="mb-2">
                         <div class="flex items-center space-x-2">
                             <!-- Prominent scan button -->

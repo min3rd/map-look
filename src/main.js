@@ -2167,6 +2167,220 @@ function showToast(message, type = 'info', duration = 3000) {
     }
 }
 
+// --- Image upload -> heightmap prototype (client-side)
+// Generate a plane mesh from an image by converting brightness to heights.
+async function generateMeshFromImage(imgElement, options = {}) {
+    // options: sizeMeters (width in meters), resolution (pixels across), heightScale
+    const sizeMeters = options.sizeMeters || 200; // world size to map image to
+    const resolution = options.resolution || 128; // sample resolution
+    const heightScale = (typeof options.heightScale === 'number') ? options.heightScale : 20;
+
+    // create an offscreen canvas and draw resized image
+    const canvas = document.createElement('canvas');
+    canvas.width = resolution; canvas.height = resolution;
+    const ctx = canvas.getContext('2d');
+    // draw image covering canvas
+    ctx.drawImage(imgElement, 0, 0, canvas.width, canvas.height);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    // compute brightness map (0..1)
+    const heights = new Float32Array(resolution * resolution);
+    for (let y = 0; y < resolution; y++) {
+        for (let x = 0; x < resolution; x++) {
+            const idx = (y * resolution + x) * 4;
+            const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+            // luminance approximation
+            const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+            // invert brightness so bright -> high (assumption) — adjust if needed
+            const v = lum;
+            heights[y * resolution + x] = v;
+        }
+    }
+
+    // build plane geometry: resolution x resolution vertices
+    const nx = resolution, ny = resolution;
+    const positions = new Float32Array(nx * ny * 3);
+    const uvs = new Float32Array(nx * ny * 2);
+    let pi = 0, ui = 0;
+    const half = sizeMeters / 2;
+    for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+            const px = (i / (nx - 1)) * sizeMeters - half;
+            const py = (j / (ny - 1)) * sizeMeters - half;
+            const h = heights[j * nx + i] * heightScale;
+            positions[pi++] = px; positions[pi++] = py; positions[pi++] = h;
+            uvs[ui++] = i / (nx - 1); uvs[ui++] = j / (ny - 1);
+        }
+    }
+    const indices = [];
+    for (let j = 0; j < ny - 1; j++) {
+        for (let i = 0; i < nx - 1; i++) {
+            const a = j * nx + i;
+            const b = j * nx + (i + 1);
+            const c = (j + 1) * nx + i;
+            const d = (j + 1) * nx + (i + 1);
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+        }
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    const mat = new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.9 });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.name = 'imageHeightmapMesh';
+
+    return mesh;
+}
+
+// Wire upload UI handlers
+try {
+    const imageUpload = document.getElementById('imageUpload');
+    const uploadPreviewBtn = document.getElementById('uploadPreviewBtn');
+    const generate3DBtn = document.getElementById('generate3DBtn');
+    const previewContainer = document.getElementById('uploadPreviewContainer');
+    const previewImg = document.getElementById('uploadPreviewImg');
+
+    let lastLoadedImage = null;
+
+    if (imageUpload) imageUpload.addEventListener('change', (ev) => {
+        const f = ev.target.files && ev.target.files[0];
+        if (!f) return;
+        const url = URL.createObjectURL(f);
+        previewImg.src = url;
+        previewContainer.classList.remove('hidden');
+        lastLoadedImage = new Image();
+        lastLoadedImage.crossOrigin = 'Anonymous';
+        lastLoadedImage.onload = () => {
+            // ready
+        };
+        lastLoadedImage.src = url;
+    });
+
+    if (uploadPreviewBtn) uploadPreviewBtn.addEventListener('click', () => {
+        if (!previewImg.src) { showToast('Vui lòng chọn file ảnh trước', 'error'); return; }
+        previewContainer.classList.remove('hidden');
+    });
+
+    if (generate3DBtn) generate3DBtn.addEventListener('click', async () => {
+        if (!lastLoadedImage) { showToast('Vui lòng chọn file ảnh trước', 'error'); return; }
+        showOverlay('Đang dựng 3D từ ảnh...', 'Mô phỏng heightmap từ độ sáng ảnh');
+        try {
+            const mesh = await generateMeshFromImage(lastLoadedImage, { sizeMeters: 200, resolution: 128, heightScale: 30 });
+            // remove existing imageHeightmapMesh if present
+            try { const old = scene.getObjectByName('imageHeightmapMesh'); if (old) scene.remove(old); } catch (e) { }
+            // place mesh at reasonable height relative to terrain (add on top)
+            mesh.position.z = 0; // user can adjust camera
+            scene.add(mesh);
+            // focus camera on mesh
+            try {
+                const box = new THREE.Box3().setFromObject(mesh);
+                const center = box.getCenter(new THREE.Vector3());
+                controls.target.copy(center);
+                camera.position.set(center.x, center.y - 200, center.z + 150);
+                controls.update();
+            } catch (e) { }
+            showToast('Mô hình 3D đã được tạo (prototype).', 'success');
+        } catch (err) {
+            console.error('generate image mesh failed', err);
+            showToast('Lỗi khi dựng 3D', 'error');
+        } finally {
+            hideOverlay();
+        }
+    });
+} catch (e) { console.warn('upload UI wiring failed', e); }
+
+// --- Server-side helpers for Option B
+async function uploadImageToServer(file) {
+    const form = new FormData();
+    form.append('image', file, file.name);
+    const res = await fetch('http://127.0.0.1:3000/upload-image', { method: 'POST', body: form });
+    if (!res.ok) throw new Error('Upload failed');
+    return await res.json();
+}
+
+// Request depth/3D generation from server. The server will forward to DEPTH_MODEL_URL if configured
+async function requestDepthFromServer(filenameOrFile) {
+    const form = new FormData();
+    if (typeof filenameOrFile === 'string') form.append('filename', filenameOrFile);
+    else form.append('image', filenameOrFile, filenameOrFile.name);
+    const res = await fetch('http://127.0.0.1:3000/depth', { method: 'POST', body: form });
+    if (!res.ok) {
+        const txt = await res.json().catch(() => null);
+        throw new Error(txt && txt.error ? txt.error : 'Depth request failed');
+    }
+    // Try parse JSON
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return await res.json();
+    // otherwise return blob (binary mesh or image) as blob
+    const buf = await res.arrayBuffer();
+    return { binary: buf, contentType: ct };
+}
+
+try {
+    const runServerDepthBtn = document.getElementById('runServerDepthBtn');
+    const useServerDepth = document.getElementById('useServerDepth');
+    if (runServerDepthBtn) runServerDepthBtn.addEventListener('click', async () => {
+        if (!imageUpload || !imageUpload.files || !imageUpload.files[0]) { showToast('Vui lòng chọn file ảnh trước', 'error'); return; }
+        const file = imageUpload.files[0];
+        showOverlay('Đang gửi ảnh lên server...', 'Upload');
+        try {
+            const up = await uploadImageToServer(file);
+            showToast('Ảnh đã upload: ' + up.filename, 'success');
+            // request depth using filename reference
+            showOverlay('Đang yêu cầu model depth...', 'Đợi phản hồi từ server/model');
+            const resp = await requestDepthFromServer(up.filename);
+            // resp can be { ok:true, modelResponse: {...} } or binary
+            if (resp && resp.modelResponse) {
+                // if modelResponse contains a URL to depth map or mesh, attempt to fetch and render
+                const mr = resp.modelResponse;
+                if (mr.depth_map_url) {
+                    // fetch image and render as heightmap
+                    const dimg = new Image();
+                    dimg.crossOrigin = 'Anonymous';
+                    dimg.src = mr.depth_map_url;
+                    dimg.onload = async () => {
+                        try { const mesh = await generateMeshFromImage(dimg, { sizeMeters: 200, resolution: 128, heightScale: 30 });
+                            try { const old = scene.getObjectByName('imageHeightmapMesh'); if (old) scene.remove(old); } catch (e) { }
+                            scene.add(mesh);
+                            showToast('Depth map rendered as mesh', 'success');
+                        } catch (e) { showToast('Failed to render depth map', 'error'); }
+                    };
+                } else if (mr.mesh_url) {
+                    showToast('Model generated: ' + mr.mesh_url, 'info');
+                    // TODO: fetch mesh and import (needs glTF loader). For now just notify.
+                } else {
+                    showToast('Model response received (no depth URL)', 'info');
+                    console.log('modelResponse', mr);
+                }
+            } else if (resp && resp.binary) {
+                // attempt to treat binary as image (depth map) first
+                try {
+                    const blob = new Blob([resp.binary], { type: resp.contentType || 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const dimg = new Image(); dimg.crossOrigin = 'Anonymous'; dimg.src = url;
+                    dimg.onload = async () => {
+                        try { const mesh = await generateMeshFromImage(dimg, { sizeMeters: 200, resolution: 128, heightScale: 30 });
+                            try { const old = scene.getObjectByName('imageHeightmapMesh'); if (old) scene.remove(old); } catch (e) { }
+                            scene.add(mesh);
+                            showToast('Binary depth rendered as mesh', 'success');
+                        } catch (e) { showToast('Failed to render binary depth', 'error'); }
+                    };
+                } catch (e) { showToast('Received binary response from server (not handled)', 'info'); }
+            }
+        } catch (err) {
+            console.error('server depth failed', err);
+            showToast('Yêu cầu server thất bại: ' + String(err), 'error');
+        } finally { hideOverlay(); }
+    });
+} catch (e) { console.warn('server depth wiring failed', e); }
+
 // Session buttons added to UI
 const saveSessionBtn = document.getElementById('saveSessionBtn');
 const loadSessionBtn = document.getElementById('loadSessionBtn');
