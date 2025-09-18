@@ -117,6 +117,23 @@ async function fetchOSM(bbox) {
         wanted.push('relation["type"="multipolygon"]["natural"="water"]');
         wanted.push('relation["type"="multipolygon"]["landuse"="reservoir"]');
     }
+    // forests / trees
+    if (document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) {
+        wanted.push('way["landuse"="forest"]');
+        wanted.push('relation["landuse"="forest"]');
+        wanted.push('way["natural"="wood"]');
+        wanted.push('relation["natural"="wood"]');
+        // individual trees as nodes
+        wanted.push('node["natural"="tree"]');
+    }
+    // ports, harbors, ferry terminals, piers
+    if (document.getElementById('cb_port') && document.getElementById('cb_port').checked) {
+        wanted.push('way["man_made"="pier"]');
+        wanted.push('way["landuse"="port"]');
+        wanted.push('node["man_made"="harbour"]');
+        wanted.push('node["amenity"="ferry_terminal"]');
+        wanted.push('relation["landuse"="port"]');
+    }
     // include hills if mountain checkbox is checked (some mapping uses 'hill')
     if (document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) {
         wanted.push('way["natural"="hill"]');
@@ -155,6 +172,8 @@ function parseOSM(osm, bboxCenter) {
     const relations = [];
     const roads = [];
     const waters = [];
+    const forests = [];
+    const trees = [];
     const parks = [];
     const hills = [];
     const buildings = [];
@@ -172,6 +191,11 @@ function parseOSM(osm, bboxCenter) {
     for (const [id, way] of waysIndex) {
         const tags = way.tags || {};
         const coords = (way.nodes || []).map(id => { const n = nodes.get(id); return n ? [n.lat, n.lon] : null; }).filter(Boolean);
+        // collect forests
+        if (tags.landuse === 'forest' || tags.natural === 'wood') {
+            forests.push({ coords, tags });
+            continue;
+        }
         if (tags.building) {
             const height = tags.height ? parseFloat(tags.height) : (tags['building:levels'] ? parseFloat(tags['building:levels']) * 3 : 10);
             buildings.push({ coords, height, tags });
@@ -187,6 +211,12 @@ function parseOSM(osm, bboxCenter) {
             hills.push({ coords, tags });
         } else if (tags.natural === 'water' || tags.water === 'lake' || tags.waterway === 'river' || tags['waterway']) {
             waters.push({ coords, tags });
+        } else if (tags.man_made === 'pier' || tags.landuse === 'port') {
+            // port / pier ways
+            if (coords && coords.length) {
+                // treat as port polygon/shape
+                waters.push({ coords, tags }); // reuse water bucket temporarily if overlapping
+            }
         } else if (tags.amenity === 'parking') {
             infra.parking.push({ coords, tags });
         } else if (tags.landuse === 'industrial') {
@@ -220,6 +250,7 @@ function parseOSM(osm, bboxCenter) {
             const stitched = [].concat(...outerWays);
             if (stitched.length >= 3) {
                 if (tags.natural === 'water' || tags.landuse === 'reservoir') waters.push({ coords: stitched, tags });
+                else if (tags.landuse === 'forest' || tags.natural === 'wood') forests.push({ coords: stitched, tags });
                 else if (tags.leisure === 'park') parks.push({ coords: stitched, tags });
                 else if (tags.building) buildings.push({ coords: stitched, height: tags.height ? parseFloat(tags.height) : 10, tags });
                 else if (tags.natural === 'hill') hills.push({ coords: stitched, tags });
@@ -238,6 +269,10 @@ function parseOSM(osm, bboxCenter) {
             const tags = el.tags || {};
             if (tags.natural === 'peak' || tags.peak || tags.place === 'mountain' || tags.natural === 'mountain') {
                 peaks.push({ coord: [el.lat, el.lon], tags });
+            }
+            // individual tree nodes
+            if (tags && (tags.natural === 'tree' || tags.natural === 'wood' || tags.tree)) {
+                trees.push({ lat: el.lat, lon: el.lon, tags });
             }
         }
     }
@@ -260,6 +295,9 @@ function parseOSM(osm, bboxCenter) {
     const parkMeshes = parks.map(p => ({ pts: p.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: p.tags }));
     const peakPoints = peaks.map(p => ({ pos: latLonToMeters(p.coord[0], p.coord[1], origin), tags: p.tags }));
     const hillMeshes = hills.map(h => ({ pts: h.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: h.tags }));
+    const forestMeshes = forests.map(f => ({ pts: f.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: f.tags }));
+    const treePoints = trees.map(t => ({ pos: latLonToMeters(t.lat, t.lon, origin), tags: t.tags }));
+    const portMeshes = []; // ports will be inferred from pier/port ways if present earlier
     // convert infra
     const infraMeshes = {
         hospitals: infra.hospitals.map(i => ({ pts: i.coords ? i.coords.map(c => latLonToMeters(c[0], c[1], origin)) : [], tags: i.tags })),
@@ -273,7 +311,7 @@ function parseOSM(osm, bboxCenter) {
         rails: infra.rails.map(i => ({ pts: i.pts ? i.pts.map(c => latLonToMeters(c[0], c[1], origin)) : i.coords.map(c => latLonToMeters(c[0], c[1], origin)), tags: i.tags })),
     };
 
-    return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes, infra: infraMeshes };
+    return { buildings: buildingMeshes, roads: roadMeshes, water: waterMeshes, parks: parkMeshes, peaks: peakPoints, hills: hillMeshes, infra: infraMeshes, forests: forestMeshes, trees: treePoints, ports: portMeshes };
 }
 
 // --- Terrain / elevation support using OpenTopoData
@@ -323,6 +361,55 @@ async function loadOpenTopoDatasets() {
         sel.addEventListener('change', () => { selectedDataset = sel.value; console.log('Selected dataset:', selectedDataset); });
     }
 }
+
+function addForestsToScene(forestMeshes) {
+    if (!scene.userData.forests) scene.userData.forests = [];
+    for (const r of scene.userData.forests) scene.remove(r);
+    scene.userData.forests = [];
+    for (const f of forestMeshes) {
+        if (!f.pts || f.pts.length < 3) continue;
+        try {
+            const shape = new THREE.Shape(f.pts.map(p => new THREE.Vector2(p.x, p.y)));
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: false });
+            const mat = new THREE.MeshLambertMaterial({ color: 0x2e8b57, opacity: 0.8, transparent: true });
+            const mesh = new THREE.Mesh(geom, mat);
+            // position slightly above terrain to avoid z-fight
+            let sumh=0,c=0; for(const p of f.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh+=hh;c++;}}
+            mesh.position.z = c? (sumh/c) : 0;
+            scene.add(mesh); scene.userData.forests.push(mesh);
+        } catch (e) { /* ignore complex shapes */ }
+    }
+}
+
+function addTreesToScene(treePoints) {
+    if (!scene.userData.trees) scene.userData.trees = [];
+    for (const r of scene.userData.trees) scene.remove(r);
+    scene.userData.trees = [];
+    const geom = new THREE.ConeGeometry(0.6, 2.0, 6);
+    const mat = new THREE.MeshLambertMaterial({ color: 0x227722 });
+    for (const t of treePoints) {
+        const h = getTerrainHeightAt(t.pos.x, t.pos.y) || 0;
+        const m = new THREE.Mesh(geom, mat);
+        m.position.set(t.pos.x, t.pos.y, h + 1);
+        scene.add(m); scene.userData.trees.push(m);
+    }
+}
+
+function addPortsToScene(portMeshes) {
+    if (!scene.userData.ports) scene.userData.ports = [];
+    for (const r of scene.userData.ports) scene.remove(r);
+    scene.userData.ports = [];
+    for (const p of portMeshes) {
+        if (!p.pts || !p.pts.length) continue;
+        const shape = new THREE.Shape(p.pts.map(pt => new THREE.Vector2(pt.x, pt.y)));
+        const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
+        const mat = new THREE.MeshLambertMaterial({ color: 0x888888, opacity: 0.9, transparent: true });
+        const mesh = new THREE.Mesh(geom, mat);
+        let sumh=0,c=0; for(const pt of p.pts){const hh=getTerrainHeightAt(pt.x,pt.y); if(!isNaN(hh)){sumh+=hh;c++;}}
+        mesh.position.z = c? (sumh/c) : 0;
+        scene.add(mesh); scene.userData.ports.push(mesh);
+    }
+}
 // Fetch elevations for an array of {lat,lon} points. Returns flat array of elevations matching input order.
 async function fetchElevationPoints(points) {
     const out = [];
@@ -333,40 +420,64 @@ async function fetchElevationPoints(points) {
         const isLocal = (typeof window !== 'undefined') && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
         const base = isLocal ? `http://localhost:3000/opentopo` : `https://api.opentopodata.org/v1/${encodeURIComponent(selectedDataset)}`;
 
+        // helper sleep for backoff
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
         let data = null;
-        // Try GET for short queries
-        try {
-            const getUrl = isLocal
-                ? `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson&dataset=${encodeURIComponent(selectedDataset)}`
-                : `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson`;
-            if (getUrl.length < 2000) {
-                const gres = await fetch(getUrl);
-                if (gres.ok) {
-                    const ct = (gres.headers.get('content-type') || '').toLowerCase();
-                    if (ct.includes('application/geo+json') || ct.includes('geojson') || ct.includes('application/json')) {
-                        data = await gres.json();
+        let attempt = 0;
+        const maxAttempts = 3;
+        for (; attempt < maxAttempts; attempt++) {
+            try {
+                // Try GET for short queries
+                const getUrl = isLocal
+                    ? `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson&dataset=${encodeURIComponent(selectedDataset)}`
+                    : `${base}?locations=${encodeURIComponent(locs)}&interpolation=cubic&format=geojson`;
+                if (getUrl.length < 2000) {
+                    const gres = await fetch(getUrl);
+                    if (gres.ok) {
+                        const ct = (gres.headers.get('content-type') || '').toLowerCase();
+                        if (ct.includes('application/geo+json') || ct.includes('geojson') || ct.includes('application/json')) {
+                            data = await gres.json();
+                        }
                     }
                 }
+                if (!data) {
+                    const body = new URLSearchParams();
+                    body.append('locations', locs);
+                    body.append('interpolation', 'cubic');
+                    body.append('format', 'geojson');
+                    if (isLocal) body.append('dataset', selectedDataset);
+                    const pres = await fetch(base, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+                    if (!pres.ok) {
+                        console.warn('Elevation POST failed for batch', i, 'status', pres.status);
+                        data = null;
+                    } else {
+                        data = await pres.json();
+                    }
+                }
+            } catch (e) {
+                console.warn('Elevation fetch attempt error for batch', i, 'attempt', attempt, e);
+                data = null;
             }
-        } catch (e) {
-            data = null;
+            const keys = Object.keys(data || {});
+            // if server returned an error status object, retry after a short backoff
+            if (keys.length === 2 && keys.includes('error') && keys.includes('status')) {
+                console.warn('OpenTopo returned error for batch', i, 'attempt', attempt, data);
+                data = null;
+                await sleep(250 * (attempt + 1));
+                continue;
+            }
+            // otherwise break and process whatever we got
+            break;
         }
 
-        if (!data) {
-            const body = new URLSearchParams();
-            body.append('locations', locs);
-            body.append('interpolation', 'cubic');
-            body.append('format', 'geojson');
-            if (isLocal) body.append('dataset', selectedDataset);
-            const pres = await fetch(base, { method: 'POST', body: body.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-            if (!pres.ok) throw new Error('Elevation fetch failed');
-            data = await pres.json();
-        }
+        console.log('fetchElevationPoints: batch', i, 'batchSize', batch.length, 'responseKeys', Object.keys(data || {}));
 
         // Parse response: support GeoJSON FeatureCollection (features[].properties.elevation) or results array
         if (data && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            // Build a map from rounded lat,lon to elevation so we can return points in the requested order
-            const map = new Map();
+            console.log('fetchElevationPoints: FeatureCollection features.length=', data.features.length);
+            // Build a features array with lat,lon,elev
+            const feats = [];
             for (const f of data.features) {
                 let elev = null;
                 if (f.properties && typeof f.properties.elevation === 'number') elev = f.properties.elevation;
@@ -374,29 +485,92 @@ async function fetchElevationPoints(points) {
                     const c = f.geometry.coordinates;
                     if (typeof c[2] === 'number') elev = c[2];
                     else if (Array.isArray(c[0]) && typeof c[0][2] === 'number') elev = c[0][2];
-                    // if geometry is a single point, coordinates might be [lon, lat, z]
                     if (elev === null && typeof c[1] === 'number' && typeof c[0] === 'number' && typeof c[2] === 'number') elev = c[2];
                 }
-                // attempt to extract lat/lon to create a key
                 let lat = null, lon = null;
                 if (f.geometry && Array.isArray(f.geometry.coordinates)) {
                     const c = f.geometry.coordinates;
-                    // coordinates could be [lon,lat,z] or nested
                     if (typeof c[1] === 'number' && typeof c[0] === 'number') { lon = c[0]; lat = c[1]; }
                     else if (Array.isArray(c[0]) && typeof c[0][1] === 'number') { lon = c[0][0]; lat = c[0][1]; }
                 }
-                if (lat !== null && lon !== null) {
-                    const key = `${lat.toFixed(6)},${lon.toFixed(6)}`;
-                    map.set(key, elev === null ? 0 : elev);
-                }
+                if (lat !== null && lon !== null) feats.push({ lat, lon, elev: (elev === null ? 0 : elev) });
             }
-            // push elevations in the same order as the requested batch
-            for (const p of batch) {
-                const key = `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
-                if (map.has(key)) out.push(map.get(key)); else out.push(0);
+
+            // If returned features count matches requested batch, perform a one-to-one nearest-neighbor assignment
+            if (feats.length === batch.length) {
+                const used = new Array(feats.length).fill(false);
+                for (const p of batch) {
+                    let bestIdx = -1, bestD = Infinity;
+                    for (let k = 0; k < feats.length; k++) {
+                        if (used[k]) continue;
+                        const dx = p.lat - feats[k].lat, dy = p.lon - feats[k].lon;
+                        const d = dx * dx + dy * dy;
+                        if (d < bestD) { bestD = d; bestIdx = k; }
+                    }
+                    if (bestIdx >= 0) { out.push(feats[bestIdx].elev); used[bestIdx] = true; }
+                    else out.push(0);
+                }
+                console.log('fetchElevationPoints: assigned one-to-one for batch', i, 'appended', batch.length, 'elevs');
+            } else {
+                // fallback: try exact lat/lon match at 6-decimal precision first
+                const map = new Map();
+                for (const f of feats) map.set(`${f.lat.toFixed(6)},${f.lon.toFixed(6)}`, f.elev);
+                for (const p of batch) {
+                    const key = `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+                    if (map.has(key)) { out.push(map.get(key)); continue; }
+                    // otherwise find nearest feature (no-one-shot reservation here)
+                    let bestIdx = -1, bestD = Infinity;
+                    for (let k = 0; k < feats.length; k++) {
+                        const dx = p.lat - feats[k].lat, dy = p.lon - feats[k].lon;
+                        const d = dx * dx + dy * dy;
+                        if (d < bestD) { bestD = d; bestIdx = k; }
+                    }
+                    if (bestIdx >= 0) out.push(feats[bestIdx].elev); else out.push(0);
+                }
+                console.log('fetchElevationPoints: fallback assignment for batch', i, 'feats', feats.length, 'appended', batch.length, 'elevs');
             }
         } else if (data && Array.isArray(data.results)) {
-            for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
+            // results[] may be same length or shorter; map robustly to requested points
+            if (data.results.length === batch.length) {
+                for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
+                console.log('fetchElevationPoints: results[] matched batch length', batch.length);
+            } else {
+                // build feats from results and nearest-match to batch points
+                const feats = [];
+                for (const r of data.results) {
+                    if (!r || !r.location) continue;
+                    feats.push({ lat: r.location.latitude || r.location.lat || null, lon: r.location.longitude || r.location.lon || null, elev: (r.elevation === null ? 0 : r.elevation) });
+                }
+                if (feats.length === batch.length) {
+                    const used = new Array(feats.length).fill(false);
+                    for (const p of batch) {
+                        let bestIdx = -1, bestD = Infinity;
+                        for (let k = 0; k < feats.length; k++) {
+                            if (used[k]) continue;
+                            const dx = p.lat - feats[k].lat, dy = p.lon - feats[k].lon;
+                            const d = dx * dx + dy * dy;
+                            if (d < bestD) { bestD = d; bestIdx = k; }
+                        }
+                        if (bestIdx >= 0) { out.push(feats[bestIdx].elev); used[bestIdx] = true; }
+                        else out.push(0);
+                    }
+                } else if (feats.length > 0) {
+                    // nearest neighbor mapping without reservation
+                    for (const p of batch) {
+                        let bestIdx = -1, bestD = Infinity;
+                        for (let k = 0; k < feats.length; k++) {
+                            const dx = p.lat - feats[k].lat, dy = p.lon - feats[k].lon;
+                            const d = dx * dx + dy * dy;
+                            if (d < bestD) { bestD = d; bestIdx = k; }
+                        }
+                        out.push(bestIdx >= 0 ? feats[bestIdx].elev : 0);
+                    }
+                } else {
+                    // no usable results, push zeros for this batch
+                    for (let k = 0; k < batch.length; k++) out.push(0);
+                    console.warn('fetchElevationPoints: results[] present but no usable locations for batch', i);
+                }
+            }
         } else {
             // fallback: try to salvage numbers
             if (data && typeof data === 'object') {
@@ -404,20 +578,30 @@ async function fetchElevationPoints(points) {
                 for (const v of vals) out.push(parseFloat(v));
             }
         }
+        // Ensure we've appended exactly batch.length elevation values for this batch
+        const appended = out.length - Math.max(0, out.length - batch.length - (points.length - (i + batch.length)));
+        // simpler: compute how many we appended in this iteration by comparing with expected index
+        // compute expected total after this batch
+        const expectedTotal = Math.min(points.length, i + batch.length);
+        if (out.length < expectedTotal) {
+            const need = expectedTotal - out.length;
+            for (let k = 0; k < need; k++) out.push(0);
+            console.warn('fetchElevationPoints: padded', need, 'zeros for batch', i, 'after', attempt + 1, 'attempts');
+        }
 
         // diagnostic: check for abrupt large jumps in this batch
-        if (out.length >= batch.length) {
-            let jumps = 0; let last = out[out.length - batch.length];
-            for (let k = out.length - batch.length + 1; k < out.length; k++) {
+        if (out.length >= expectedTotal) {
+            let jumps = 0; let last = out[expectedTotal - batch.length];
+            for (let k = expectedTotal - batch.length + 1; k < expectedTotal; k++) {
                 const v = out[k]; if (Math.abs(v - last) > 1000) jumps++; last = v;
             }
-            if (jumps > Math.max(1, Math.floor(batch.length / 10))) console.warn('Large elevation jumps detected in batch — possible ordering mismatch', { batchSize: batch.length, jumps });
+            if (jumps > Math.max(1, Math.floor(batch.length / 10))) console.warn('Large elevation jumps detected in batch — possible ordering mismatch', { batchStart: i, batchSize: batch.length, jumps });
         }
     }
     return out;
 }
 
-async function buildTerrainForBBox(bbox, gridSize = 64) {
+async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
     // bbox = [south, west, north, east]
     const [s, w, n, e] = bbox;
     const nx = gridSize, ny = gridSize;
@@ -438,6 +622,147 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
         for (let i = 0; i < nx; i++) { heights[j][i] = heightsFlat[idx++] || 0; }
     }
 
+    // define origin (bbox center) early so water integration and spacing can use it
+    const origin = { lat: (s + n) / 2, lon: (w + e) / 2 };
+    // precompute XY positions for each grid cell in local meters
+    const xyGrid = new Array(ny);
+    for (let j = 0; j < ny; j++) {
+        xyGrid[j] = new Array(nx);
+        for (let i = 0; i < nx; i++) {
+            const pxy = latLonToMeters(lats[j], lons[i], origin);
+            xyGrid[j][i] = { x: pxy.x, y: pxy.y };
+        }
+    }
+
+    // prepare water mask if waterMeshes provided (waterMeshes are in local meters coords)
+    const waterMask = new Array(ny);
+    for (let j = 0; j < ny; j++) { waterMask[j] = new Array(nx).fill(false); }
+    // helper: point-in-polygon (ray-casting)
+    function pointInPoly(x, y, poly) {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = poly[i].x, yi = poly[i].y;
+            const xj = poly[j].x, yj = poly[j].y;
+            const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi + 0.0) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+    // helper: distance from point to polyline (segments)
+    function pointToPolylineDist(x, y, pts) {
+        let best = Infinity;
+        for (let k = 0; k < pts.length - 1; k++) {
+            const x1 = pts[k].x, y1 = pts[k].y; const x2 = pts[k+1].x, y2 = pts[k+1].y;
+            const A = x - x1, B = y - y1, C = x2 - x1, D = y2 - y1;
+            const dot = A * C + B * D;
+            const len2 = C * C + D * D;
+            const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, dot / len2));
+            const px = x1 + t * C, py = y1 + t * D;
+            const dx = x - px, dy = y - py; const d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+        }
+        return Math.sqrt(best);
+    }
+
+    if (waterMeshes && Array.isArray(waterMeshes) && waterMeshes.length) {
+        // approximate grid spacing for river width threshold
+        const approxSpacing = Math.max(Math.abs(latLonToMeters(lats[0], lons[1], origin).x - latLonToMeters(lats[0], lons[0], origin).x), Math.abs(latLonToMeters(lats[1], lons[0], origin).y - latLonToMeters(lats[0], lons[0], origin).y)) || 1;
+        for (const w of waterMeshes) {
+            if (!w || !w.pts || !w.pts.length) continue;
+            // polygonal water (lake/reservoir)
+            if (w.pts.length >= 3) {
+                // polygonal water (lake/reservoir)
+                // Step 1: mark grid cells whose centers fall inside the polygon
+                for (let j = 0; j < ny; j++) {
+                    for (let i = 0; i < nx; i++) {
+                        const pxy = latLonToMeters(lats[j], lons[i], origin);
+                        if (pointInPoly(pxy.x, pxy.y, w.pts)) {
+                            waterMask[j][i] = true;
+                        }
+                    }
+                }
+
+                // Step 2: find shore (adjacent non-water) cell heights
+                const shoreHeights = [];
+                for (let j = 0; j < ny; j++) {
+                    for (let i = 0; i < nx; i++) {
+                        if (!waterMask[j][i]) continue;
+                        // check 8-neighbors for any non-water neighbor and collect its height
+                        for (let dj = -1; dj <= 1; dj++) {
+                            for (let di = -1; di <= 1; di++) {
+                                if (dj === 0 && di === 0) continue;
+                                const nj = j + dj, ni = i + di;
+                                if (nj < 0 || nj >= ny || ni < 0 || ni >= nx) continue;
+                                if (!waterMask[nj][ni]) {
+                                    const hh = (heights[nj] && typeof heights[nj][ni] === 'number') ? heights[nj][ni] : null;
+                                    if (hh !== null) shoreHeights.push(hh);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Step 3: decide water level. Prefer min of adjacent shore heights (conservative).
+                let waterLevel = null;
+                if (shoreHeights.length) {
+                    waterLevel = Math.min(...shoreHeights);
+                } else {
+                    // fallback: sample nearest grid heights to polygon vertices (previous behaviour)
+                    const vHeights = [];
+                    for (const v of w.pts) {
+                        let bestD = Infinity, bi = 0, bj = 0;
+                        for (let jj = 0; jj < ny; jj++) for (let ii = 0; ii < nx; ii++) {
+                            const dx = xyGrid[jj][ii].x - v.x, dy = xyGrid[jj][ii].y - v.y; const d = dx*dx + dy*dy;
+                            if (d < bestD) { bestD = d; bi = ii; bj = jj; }
+                        }
+                        const h = (heights[bj] && typeof heights[bj][bi] === 'number') ? heights[bj][bi] : null;
+                        if (h !== null) vHeights.push(h);
+                    }
+                    if (vHeights.length) waterLevel = Math.min(...vHeights);
+                }
+
+                // Step 4: apply water level to masked cells (do not raise existing lower terrain)
+                if (waterLevel !== null) {
+                    const eps = 0.02;
+                    for (let j = 0; j < ny; j++) {
+                        for (let i = 0; i < nx; i++) {
+                            if (!waterMask[j][i]) continue;
+                            const cur = (heights[j] && typeof heights[j][i] === 'number') ? heights[j][i] : waterLevel - eps;
+                            // ensure water does not sit above shore: cap at waterLevel - eps
+                            heights[j][i] = Math.min(cur, waterLevel - eps);
+                        }
+                    }
+                }
+            } else if (w.pts.length > 1) {
+                // polyline -> river; mark grid points within threshold of the polyline
+                const threshold = approxSpacing * 1.5;
+                for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+                    const xy = latLonToMeters(lats[j], lons[i], origin);
+                    const d = pointToPolylineDist(xy.x, xy.y, w.pts);
+                    if (d <= threshold) {
+                        waterMask[j][i] = true;
+                        // assign height to nearest polyline vertex height (use nearest vertex)
+                        let bestD = Infinity, bi = 0;
+                        for (let k = 0; k < w.pts.length; k++) {
+                            const dx = xy.x - w.pts[k].x, dy = xy.y - w.pts[k].y; const dd = dx*dx + dy*dy;
+                            if (dd < bestD) { bestD = dd; bi = k; }
+                        }
+                        // approximate river height by nearest grid to that polyline vertex
+                        const pv = w.pts[bi];
+                        let bestD2 = Infinity, gi = 0, gj = 0;
+                        for (let jj = 0; jj < ny; jj++) for (let ii = 0; ii < nx; ii++) {
+                            const p2 = latLonToMeters(lats[jj], lons[ii], origin);
+                            const dx = p2.x - pv.x, dy = p2.y - pv.y; const d2 = dx*dx + dy*dy;
+                            if (d2 < bestD2) { bestD2 = d2; gi = ii; gj = jj; }
+                        }
+                        const ph = (heights[gj] && typeof heights[gj][gi] === 'number') ? heights[gj][gi] : heights[j][i];
+                        heights[j][i] = ph - 0.02;
+                    }
+                }
+            }
+        }
+    }
+
     // compute min/max for diagnostics and visualization scaling
     let minH = Infinity, maxH = -Infinity;
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
@@ -453,8 +778,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
     const extraScale = delta < 5 ? 10 : (delta < 20 ? 3 : 1);
     const visualScale = VERT_SCALE * extraScale;
 
-    // create geometry in local meters (origin = bbox center)
-    const origin = { lat: (s + n) / 2, lon: (w + e) / 2 };
+    // create geometry in local meters (using previously computed origin)
     // grid spacing in meters approximated by latLonToMeters delta
     const p00 = latLonToMeters(lats[0], lons[0], origin);
     const p10 = latLonToMeters(lats[0], lons[1], origin);
@@ -471,13 +795,9 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
     let cpi = 0;
     // track minX/minY in local meters
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const xyGrid = new Array(ny);
     for (let j = 0; j < ny; j++) {
-        xyGrid[j] = new Array(nx);
         for (let i = 0; i < nx; i++) {
-            const lat = lats[j], lon = lons[i];
-            const p = latLonToMeters(lat, lon, origin);
-            xyGrid[j][i] = { x: p.x, y: p.y };
+            const p = xyGrid[j][i];
             if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
             if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
             const h = heights[j][i];
@@ -485,10 +805,14 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
             positions[pi++] = p.y; // Y
             positions[pi++] = (h - minH) * visualScale; // Z
 
-            // color
-            const t = Math.max(0, Math.min(1, (h + 50) / 1000));
-            const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
-            colors[cpi++] = r; colors[cpi++] = g; colors[cpi++] = b;
+            // color: tint water vertices blue, else terrain gradient
+            if (waterMask[j][i]) {
+                colors[cpi++] = 0.1; colors[cpi++] = 0.45; colors[cpi++] = 0.85;
+            } else {
+                const t = Math.max(0, Math.min(1, (h + 50) / 1000));
+                const r = 0.2 + 0.6 * t; const g = 0.6 * (1 - t) + 0.3 * t; const b = 0.2;
+                colors[cpi++] = r; colors[cpi++] = g; colors[cpi++] = b;
+            }
         }
     }
 
@@ -529,6 +853,97 @@ async function buildTerrainForBBox(bbox, gridSize = 64) {
     // diagnostic samples
     const sample = (i, j) => ({ i, j, h: heights[j] && heights[j][i] });
     console.log('Terrain samples:', sample(0,0), sample(nx-1,0), sample(0,ny-1), sample(nx-1,ny-1), sample(Math.floor(nx/2), Math.floor(ny/2)));
+
+    // Temporary debug visualizer: place small spheres at each grid vertex colored by height
+    try {
+        // visualizeTerrainDebug(terrainGrid);
+    } catch (e) { /* ignore in prod */ }
+}
+
+// Debug helper: visualize terrain grid vertices and log large adjacent jumps
+function visualizeTerrainDebug(grid) {
+    if (!grid || !grid.nx) return;
+    // remove any previous debug group
+    if (scene.userData.terrainDebugGroup) { scene.remove(scene.userData.terrainDebugGroup); scene.userData.terrainDebugGroup = null; }
+    const g = new THREE.Group();
+    const sphGeom = new THREE.SphereGeometry(Math.max(0.5, Math.min(2, (grid.dx || 1) * 0.1)), 6, 6);
+    let jumps = [];
+    const allHeights = [];
+    for (let j = 0; j < grid.ny; j++) {
+        for (let i = 0; i < grid.nx; i++) {
+            const xy = grid.xyGrid[j][i];
+            const h = (grid.heights[j] && typeof grid.heights[j][i] === 'number') ? grid.heights[j][i] : grid.minH;
+            allHeights.push(h);
+            const z = (h - grid.minH) * grid.visualScale;
+            const t = Math.max(0, Math.min(1, (h - grid.minH) / Math.max(1, (grid.visualScale))));
+            const color = new THREE.Color().setHSL(0.6 - 0.6 * t, 0.6, 0.5);
+            const mat = new THREE.MeshBasicMaterial({ color });
+            const s = new THREE.Mesh(sphGeom, mat);
+            s.position.set(xy.x, xy.y, z);
+            g.add(s);
+            // check adjacency to right and down
+            if (i < grid.nx - 1) {
+                const h2 = grid.heights[j][i+1] || h;
+                if (Math.abs(h2 - h) > 50) jumps.push({ i, j, i2: i+1, j2: j, dh: h2 - h });
+            }
+            if (j < grid.ny - 1) {
+                const h2 = grid.heights[j+1][i] || h;
+                if (Math.abs(h2 - h) > 50) jumps.push({ i, j, i2: i, j2: j+1, dh: h2 - h });
+            }
+        }
+    }
+    scene.add(g);
+    scene.userData.terrainDebugGroup = g;
+    console.log('Terrain debug: total vertices=', grid.nx * grid.ny, 'large adjacency jumps=', jumps.length);
+    if (jumps.length) console.table(jumps.slice(0,50));
+
+    // analyze height clusters
+    if (allHeights.length) {
+        // build histogram of rounded heights
+        const rounded = allHeights.map(h => Math.round(h));
+        const counts = new Map();
+        for (const v of rounded) counts.set(v, (counts.get(v) || 0) + 1);
+        const entries = Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]);
+        console.log('Height histogram (top 10):', entries.slice(0,10));
+        // detect if there are two dominant clusters
+        if (entries.length > 1) {
+            const top = entries[0][0], topCnt = entries[0][1];
+            const second = entries[1][0], secondCnt = entries[1][1];
+            if (topCnt > 0 && secondCnt > 0 && (topCnt + secondCnt) / allHeights.length > 0.5) {
+                console.log('Detected two dominant height clusters:', { top, topCnt, second, secondCnt });
+                // check row means and column means to see if pattern is by rows or columns
+                const rowMeans = [];
+                for (let j = 0; j < grid.ny; j++) {
+                    let s=0,c=0; for(let i=0;i<grid.nx;i++){ const v=grid.heights[j][i]||grid.minH; s+=v; c++; } rowMeans.push(s/c);
+                }
+                const colMeans = [];
+                for (let i = 0; i < grid.nx; i++) {
+                    let s=0,c=0; for(let j=0;j<grid.ny;j++){ const v=grid.heights[j][i]||grid.minH; s+=v; c++; } colMeans.push(s/c);
+                }
+                // find large jumps along rows
+                let rowSplit = -1; for (let j=0;j<rowMeans.length-1;j++){ if (Math.abs(rowMeans[j+1]-rowMeans[j]) > Math.max(5, Math.abs(rowMeans[j])*0.1)) { rowSplit = j; break; } }
+                let colSplit = -1; for (let i=0;i<colMeans.length-1;i++){ if (Math.abs(colMeans[i+1]-colMeans[i]) > Math.max(5, Math.abs(colMeans[i])*0.1)) { colSplit = i; break; } }
+                console.log('Row split index (first large jump):', rowSplit, 'Col split index:', colSplit);
+            }
+        }
+    }
+
+    // highlight jump positions with red spheres for clarity
+    if (jumps.length) {
+        const redMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const big = new THREE.SphereGeometry(Math.max(0.8, (grid.dx || 1) * 0.15), 8, 8);
+        const jumpGroup = new THREE.Group();
+        for (const jm of jumps) {
+            const xy = grid.xyGrid[jm.j][jm.i];
+            const h = (grid.heights[jm.j] && typeof grid.heights[jm.j][jm.i] === 'number') ? grid.heights[jm.j][jm.i] : grid.minH;
+            const z = (h - grid.minH) * grid.visualScale;
+            const s = new THREE.Mesh(big, redMat);
+            s.position.set(xy.x, xy.y, z + 0.5);
+            jumpGroup.add(s);
+        }
+        scene.add(jumpGroup);
+        scene.userData.terrainDebugJumps = jumpGroup;
+    }
 }
 
 function getTerrainHeightAt(x, y) {
@@ -664,51 +1079,12 @@ function addBuildingsToScene(meshes) {
         mesh.position.z = baseHeight;
         scene.add(mesh);
         buildings.push(mesh);
-        // add label above building (use tag name if available)
-        const labelText = (m.tags && (m.tags.name || m.tags['addr:housename'])) ? (m.tags.name || m.tags['addr:housename']) : 'Tòa nhà';
-        const label = makeLabel(labelText, { font: '18px Arial', scale: 1.2 });
-        label.position.set(centroidX, centroidY, mesh.position.z + m.height + 6);
-        _recordLabel(label);
+        // labels removed by user request
     }
 }
 
 // Helper: create a sprite label from text
-function makeLabel(text, options = {}) {
-    const font = options.font || '24px Arial';
-    const padding = 8;
-    const color = options.color || 'rgba(255,255,255,0.95)';
-    const bg = options.bg || 'rgba(0,0,0,0.6)';
-    // draw onto canvas
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    ctx.font = font;
-    const metrics = ctx.measureText(text);
-    const w = Math.ceil(metrics.width) + padding * 2;
-    const h = Math.ceil(parseInt(font, 10)) + padding * 2;
-    canvas.width = w; canvas.height = h;
-    // background
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-    // text
-    ctx.fillStyle = color;
-    ctx.font = font;
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, padding, h / 2);
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.needsUpdate = true;
-    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: true, depthWrite: false });
-    const sprite = new THREE.Sprite(mat);
-    // scale down to reasonable world size
-    const scale = options.scale || 10;
-    sprite.scale.set(w / 10 * scale * 0.1, h / 10 * scale * 0.1, 1);
-    return sprite;
-}
-
-function _recordLabel(sprite) {
-    if (!scene.userData.labels) scene.userData.labels = [];
-    scene.add(sprite);
-    scene.userData.labels.push(sprite);
-}
+// Labels removed by user request: makeLabel and _recordLabel functions deleted.
 
 // New renderers for other types
 function addRoadsToScene(roadMeshes) {
@@ -964,12 +1340,7 @@ function addParksToScene(parkMeshes) {
         mesh.position.z = 0;
         scene.add(mesh);
         scene.userData.parks.push(mesh);
-        // label
-        const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
-        const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
-        const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Công viên', { font: '16px Arial', scale: 1.0 });
-        label.position.set(cx, cy, 6);
-        _recordLabel(label);
+    // labels removed by user request
     }
 }
 
@@ -984,10 +1355,7 @@ function addPeaksToScene(points) {
         mesh.position.set(p.pos.x, p.pos.y, 10);
         scene.add(mesh);
         scene.userData.peaks.push(mesh);
-        // label
-        const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Đỉnh', { font: '14px Arial', scale: 1.0 });
-        label.position.set(p.pos.x, p.pos.y, 30);
-        _recordLabel(label);
+    // labels removed by user request
     }
 }
 
@@ -1015,9 +1383,7 @@ function addInfraToScene(infra) {
                 m.position.set(h.pos.x, h.pos.y, hh + 2);
                 m.userData = { type: 'hospital', tags: h.tags };
                 addRecorded(m);
-                const label = makeLabel(h.tags && h.tags.name ? h.tags.name : 'Bệnh viện', { font: '14px Arial', scale: 1.0 });
-                label.position.set(h.pos.x, h.pos.y, hh + 6);
-                _recordLabel(label);
+                // labels removed by user request
             } else if (h.pts && h.pts.length) {
                 // extrude area
                 const shape = new THREE.Shape(h.pts.map(p => new THREE.Vector2(p.x, p.y)));
@@ -1031,9 +1397,7 @@ function addInfraToScene(infra) {
                 addRecorded(mesh);
                 const xs = h.pts.map(p => p.x), ys = h.pts.map(p => p.y);
                 const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
-                const label = makeLabel(h.tags && h.tags.name ? h.tags.name : 'Bệnh viện', { font: '14px Arial', scale: 1.0 });
-                label.position.set(cx, cy, base + 8);
-                _recordLabel(label);
+                // labels removed by user request
             }
         }
     }
@@ -1046,9 +1410,7 @@ function addInfraToScene(infra) {
                 m.position.set(s.pos.x, s.pos.y, sh + 2);
                 m.userData = { type: 'school', tags: s.tags };
                 addRecorded(m);
-                const label = makeLabel(s.tags && s.tags.name ? s.tags.name : 'Trường', { font: '14px Arial', scale: 1.0 });
-                label.position.set(s.pos.x, s.pos.y, sh + 6);
-                _recordLabel(label);
+                // labels removed by user request
             } else if (s.pts && s.pts.length) {
                 const shape = new THREE.Shape(s.pts.map(p => new THREE.Vector2(p.x, p.y)));
                 const geom = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false });
@@ -1060,9 +1422,7 @@ function addInfraToScene(infra) {
                 addRecorded(mesh);
                 const xs = s.pts.map(p => p.x), ys = s.pts.map(p => p.y);
                 const cx = xs.reduce((t, v) => t + v, 0) / xs.length; const cy = ys.reduce((t, v) => t + v, 0) / ys.length;
-                const label = makeLabel(s.tags && s.tags.name ? s.tags.name : 'Trường', { font: '14px Arial', scale: 1.0 });
-                label.position.set(cx, cy, base2 + 6);
-                _recordLabel(label);
+                // labels removed by user request
             }
         }
     }
@@ -1078,9 +1438,7 @@ function addInfraToScene(infra) {
             m.position.set(b.pos.x, b.pos.y, bh + 1.5);
             m.userData = { type: 'bus', tags: b.tags };
             addRecorded(m);
-            const label = makeLabel(b.tags && b.tags.name ? b.tags.name : 'Trạm bus', { font: '12px Arial', scale: 0.9 });
-            label.position.set(b.pos.x, b.pos.y, bh + 4);
-            _recordLabel(label);
+            // labels removed by user request
         }
     }
 
@@ -1097,9 +1455,7 @@ function addInfraToScene(infra) {
             addRecorded(mesh);
             const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
             const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
-            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Bãi đậu xe', { font: '12px Arial', scale: 0.9 });
-            label.position.set(cx, cy, 4);
-            _recordLabel(label);
+            // labels removed by user request
         }
     }
     if (infra.industrial) {
@@ -1112,9 +1468,7 @@ function addInfraToScene(infra) {
             addRecorded(mesh);
             const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
             const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
-            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Khu CN', { font: '12px Arial', scale: 0.9 });
-            label.position.set(cx, cy, 8);
-            _recordLabel(label);
+            // labels removed by user request
         }
     }
     if (infra.airports) {
@@ -1127,9 +1481,7 @@ function addInfraToScene(infra) {
             addRecorded(mesh);
             const xs = p.pts.map(pt => pt.x), ys = p.pts.map(pt => pt.y);
             const cx = xs.reduce((s, v) => s + v, 0) / xs.length; const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
-            const label = makeLabel(p.tags && p.tags.name ? p.tags.name : 'Sân bay', { font: '12px Arial', scale: 0.9 });
-            label.position.set(cx, cy, 6);
-            _recordLabel(label);
+            // labels removed by user request
         }
     }
 
@@ -1187,18 +1539,18 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
     const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
     try {
         showLoader(true);
-        // build terrain for the selected bbox first so objects can align to it
+        const osm = await fetchOSM(bbox);
+        const parsed = parseOSM(osm, center);
+        // build terrain after parsing so we can merge water into terrain
         try {
-            await buildTerrainForBBox(bbox, 48);
+            await buildTerrainForBBox(bbox, 48, parsed.water);
         } catch (terrErr) {
             console.warn('Terrain fetch failed, continuing without terrain', terrErr);
         }
-        const osm = await fetchOSM(bbox);
-        const parsed = parseOSM(osm, center);
         // render based on selections
         if (parsed.buildings && document.getElementById('cb_building').checked) addBuildingsToScene(parsed.buildings);
         if (parsed.roads && document.getElementById('cb_road').checked) addRoadsToScene(parsed.roads);
-        if (parsed.water && (document.getElementById('cb_lake').checked || document.getElementById('cb_river').checked)) addWaterToScene(parsed.water);
+    // water is now merged into the terrain; do not create a separate water layer
         if (parsed.parks && document.getElementById('cb_park').checked) addParksToScene(parsed.parks);
         if (parsed.peaks && document.getElementById('cb_mountain').checked) addPeaksToScene(parsed.peaks);
         if (parsed.hills && document.getElementById('cb_mountain').checked) addHillsToScene(parsed.hills);
