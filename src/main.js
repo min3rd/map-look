@@ -89,9 +89,9 @@ function initMap() {
                 html += `Total damage (local): ${Math.round(cas.totalDamage || 0)}u<br/>`;
                 html += `Estimated deaths: ${Math.round(cas.estimatedDeaths || 0)}<br/>`;
                 if (cas.perCell && cas.perCell.length) {
-                    const top = cas.perCell.slice().sort((a,b)=> (b.deaths||0)-(a.deaths||0)).slice(0,3);
+                    const top = cas.perCell.slice().sort((a, b) => (b.deaths || 0) - (a.deaths || 0)).slice(0, 3);
                     html += `<hr/><small>Top cells:</small><br/>`;
-                    for (const t of top) html += `r${t.r},c${t.c}: ${Math.round(t.deaths||0)}<br/>`;
+                    for (const t of top) html += `r${t.r},c${t.c}: ${Math.round(t.deaths || 0)}<br/>`;
                 }
                 html += `</div>`;
                 L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
@@ -138,7 +138,7 @@ function initMap() {
                 const summaryEl = document.getElementById('damageSummary');
                 if (summary && typeof summary.totalDamage === 'number') {
                     const topArr = (summary.buildingDamages || []).slice(0, 3);
-                    const top = topArr.map((b, i) => `${i+1}. ${Math.round(b.damage)}u`).join('; ');
+                    const top = topArr.map((b, i) => `${i + 1}. ${Math.round(b.damage)}u`).join('; ');
                     let txt = `Tổng thiệt hại: ${Math.round(summary.totalDamage)}u` + (top ? ` — Top: ${top}` : '');
                     if (casualties && typeof casualties.estimatedDeaths === 'number') txt += ` — Est deaths: ${Math.round(casualties.estimatedDeaths)}`;
                     showToast(`Triển khai ${scenario.length} vũ khí (${weaponType}) — Tổng thiệt hại ≈ ${Math.round(summary.totalDamage)}u.`);
@@ -230,8 +230,9 @@ function loadAppState() {
         async function restoreFromState(st) {
             try {
                 if (!st.parsed) return;
-                // show overlay
-                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.remove('hidden'); } catch (e) { }
+                // NOTE: overlay is shown/hidden by the button event handlers (showOverlay/hideOverlay)
+                // Do not manipulate the overlay DOM here so the UI feedback appears immediately
+                // when the user clicks the Save/Load buttons.
                 lastParsed = st.parsed;
                 lastOrigin = st.origin || lastOrigin;
                 lastBBox = st.bbox || lastBBox;
@@ -302,6 +303,21 @@ function loadAppState() {
                     }
                 }
 
+                // if bbox was saved, draw selection rectangle and zoom to it
+                try {
+                    if (st.bbox && Array.isArray(st.bbox) && st.bbox.length === 4) {
+                        // st.bbox is [south, west, north, east]
+                        const [s, w, n, e] = st.bbox;
+                        // remove existing rect if any
+                        try { if (rect && rect.remove) rect.remove(); } catch (e) { }
+                        const bounds = L.latLngBounds([s, w], [n, e]);
+                        rect = L.rectangle(bounds, { color: '#f06', weight: 1 }).addTo(selectionLayer);
+                        // set lastBBox and fit map
+                        lastBBox = st.bbox;
+                        try { map.fitBounds(bounds.pad ? bounds.pad(0.05) : bounds, { animate: true }); } catch (e) { map.fitBounds(bounds); }
+                    }
+                } catch (e) { }
+
                 // restore camera if saved
                 try {
                     if (st.camera && camera) {
@@ -313,15 +329,15 @@ function loadAppState() {
                     }
                 } catch (e) { }
 
-                // hide overlay
-                try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) { }
+                // overlay hide is the responsibility of the caller (e.g. button handler)
             } catch (e) { }
         }
 
-        // kick off async restore but don't block startup
-        restoreFromState(state);
+        // return the restore promise so callers can await completion
+        return restoreFromState(state);
     } catch (e) { }
 }
+
 
 async function fetchOSM(bbox) {
     // bbox = south,west,north,east
@@ -429,11 +445,24 @@ async function fetchOSM(bbox) {
     return data;
 }
 
-function showLoader(yes) {
-    const el = document.getElementById('loader');
-    if (!el) return;
-    if (yes) el.classList.remove('hidden'); else el.classList.add('hidden');
+// Overlay helpers for save/load/restore messaging
+function showOverlay(mainText, detailText) {
+    try {
+        const ov = document.getElementById('restoreOverlay');
+        console.log(ov);
+
+        if (!ov) return;
+        const txt = document.getElementById('restoreOverlayText');
+        const det = document.getElementById('restoreOverlayDetail');
+        if (txt && mainText) txt.textContent = mainText;
+        if (det && detailText) det.textContent = detailText || '';
+        ov.classList.remove('hidden');
+    } catch (e) { }
 }
+
+function hideOverlay() { try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) { } }
+
+function setOverlayDetail(detailText) { try { const det = document.getElementById('restoreOverlayDetail'); if (det) det.textContent = detailText; } catch (e) { } }
 
 function parseOSM(osm, bboxCenter) {
     const nodes = new Map();
@@ -1807,11 +1836,11 @@ loadOpenTopoDatasets();
 
 document.getElementById('scanBtn').addEventListener('click', async () => {
     if (!rect) { showToast('Vui lòng chọn vùng trên bản đồ bằng cách nhấp-drag.', 'error'); return; }
+    showOverlay('Đang tải dữ liệu OSM...', 'Gọi Overpass API để lấy tòa nhà và hạ tầng');
     const b = rect.getBounds();
     const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
     const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
     try {
-        showLoader(true);
         const osm = await fetchOSM(bbox);
         const parsed = parseOSM(osm, center);
         // persist parsed data for session restore
@@ -1819,6 +1848,7 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         lastOrigin = { lat: center[0], lon: center[1] };
         // build terrain after parsing so we can merge water into terrain
         try {
+            try { setOverlayDetail('Đang xây dựng địa hình (lấy cao độ)...'); } catch (e) { }
             await buildTerrainForBBox(bbox, 48, parsed.water);
         } catch (terrErr) {
         }
@@ -1866,8 +1896,7 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
     } catch (err) {
         showToast('Lỗi khi lấy dữ liệu OSM', 'error');
     } finally {
-        showLoader(false);
-        try { saveAppState(); } catch (err) { }
+        hideOverlay();
     }
 });
 
@@ -1875,14 +1904,13 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
 let heatLayer = null;
 let choroplethLayer = null;
 function clearVizLayers() {
-    try { if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; } } catch (e) {}
-    try { if (choroplethLayer) { map.removeLayer(choroplethLayer); choroplethLayer = null; } } catch (e) {}
+    try { if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; } } catch (e) { }
+    try { if (choroplethLayer) { map.removeLayer(choroplethLayer); choroplethLayer = null; } } catch (e) { }
 }
 
 function buildHeatmapFromScenario(scenario) {
     // Leaflet.heat expects array of [lat, lon, intensity]
     const points = [];
-    const origin = weaponSim.origin || { lat: 21.028511, lon: 105.804817 };
     for (const s of scenario) {
         // intensity use weapon power (normalized) — here we use power directly
         const lat = s.lat, lon = s.lon;
@@ -1949,7 +1977,7 @@ function buildChoroplethFromScenario(scenario, bbox, gridSize = 10, casualtiesGr
     }
     choroplethLayer.addTo(map);
     // render legend for damage
-    try { renderLegend(maxV, 'Damage (u)'); } catch (e) {}
+    try { renderLegend(maxV, 'Damage (u)'); } catch (e) { }
 }
 
 function interpolateColor(a, b, t) { return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)]; }
@@ -1964,11 +1992,11 @@ function renderLegend(maxValue, label) {
         const stops = [0, 0.25, 0.5, 0.75, 1.0];
         let html = `<div style="font-size:12px"><strong>${label || 'Legend'}</strong></div><div style="display:flex;align-items:center;margin-top:6px">`;
         for (const s of stops) {
-            const col = s < 0.5 ? interpolateColor([0,128,0],[255,200,0], s * 2) : interpolateColor([255,200,0],[200,20,20], (s - 0.5) * 2);
+            const col = s < 0.5 ? interpolateColor([0, 128, 0], [255, 200, 0], s * 2) : interpolateColor([255, 200, 0], [200, 20, 20], (s - 0.5) * 2);
             const hex = rgbToHex(col[0], col[1], col[2]);
             html += `<div style="width:28px;height:14px;background:${hex};margin-right:4px;border:1px solid #222"></div>`;
         }
-        html += `</div><div style="font-size:11px;margin-top:4px;display:flex;justify-content:space-between;max-width:170px"><span>0</span><span>${Math.round(maxV/2)}</span><span>${Math.round(maxV)}</span></div>`;
+        html += `</div><div style="font-size:11px;margin-top:4px;display:flex;justify-content:space-between;max-width:170px"><span>0</span><span>${Math.round(maxV / 2)}</span><span>${Math.round(maxV)}</span></div>`;
         el.innerHTML = html;
     } catch (e) { console.warn('renderLegend failed', e); }
 }
@@ -1980,7 +2008,7 @@ try {
         // simply clear existing layers; if there is a last scenario we can re-create viz
         clearVizLayers();
     });
-} catch (e) {}
+} catch (e) { }
 
 // After running a scenario, build selected visualization
 function applyVisualizationIfRequested(scenario, bbox) {
@@ -1990,28 +2018,28 @@ function applyVisualizationIfRequested(scenario, bbox) {
         const mode = vizSel.value;
         if (mode === 'heatmap') buildHeatmapFromScenario(scenario);
         else if (mode === 'choropleth') {
-                // compute casualties grid from UI params
+            // compute casualties grid from UI params
             const popTotal = parseFloat(document.getElementById('popTotal') && document.getElementById('popTotal').value) || null;
             const popDensity = parseFloat(document.getElementById('popDensity') && document.getElementById('popDensity').value) || null;
             const mortalityRate = parseFloat(document.getElementById('mortalityRate') && document.getElementById('mortalityRate').value) || 0.01;
             const params = { bbox: bbox || mapBoundsToBBox(), popTotal: popTotal, popDensity: popDensity, mortalityRate: mortalityRate };
-                let cas = null;
-                try { cas = weaponSim.estimateCasualtiesForScenario(scenario, params); } catch (e) { cas = null; }
-                let casualtiesGrid = null;
-                if (cas && Array.isArray(cas.perCell) && cas.perCell.length) {
-                    // convert flat perCell into 2D grid matching grid size used in buildChoropleth
+            let cas = null;
+            try { cas = weaponSim.estimateCasualtiesForScenario(scenario, params); } catch (e) { cas = null; }
+            let casualtiesGrid = null;
+            if (cas && Array.isArray(cas.perCell) && cas.perCell.length) {
+                // convert flat perCell into 2D grid matching grid size used in buildChoropleth
                 const gridSize = parseInt(document.getElementById('choroplethGridSize') && document.getElementById('choroplethGridSize').value) || 10;
-                    casualtiesGrid = new Array(gridSize);
-                    for (let r = 0; r < gridSize; r++) casualtiesGrid[r] = new Array(gridSize).fill(0);
-                    for (const p of cas.perCell) {
-                        if (p.r >= 0 && p.c >= 0 && p.r < gridSize && p.c < gridSize) casualtiesGrid[p.r][p.c] = p.deaths;
-                    }
-                    // update damageSummary with deaths
-                    const summaryEl = document.getElementById('damageSummary');
-                    if (summaryEl) summaryEl.textContent = `Tổng thiệt hại: ${Math.round(cas.totalDamage)}u — Est deaths: ${Math.round(cas.estimatedDeaths)}`;
+                casualtiesGrid = new Array(gridSize);
+                for (let r = 0; r < gridSize; r++) casualtiesGrid[r] = new Array(gridSize).fill(0);
+                for (const p of cas.perCell) {
+                    if (p.r >= 0 && p.c >= 0 && p.r < gridSize && p.c < gridSize) casualtiesGrid[p.r][p.c] = p.deaths;
                 }
-            buildChoroplethFromScenario(scenario, bbox || mapBoundsToBBox(), gridSize, casualtiesGrid);
+                // update damageSummary with deaths
+                const summaryEl = document.getElementById('damageSummary');
+                if (summaryEl) summaryEl.textContent = `Tổng thiệt hại: ${Math.round(cas.totalDamage)}u — Est deaths: ${Math.round(cas.estimatedDeaths)}`;
             }
+            buildChoroplethFromScenario(scenario, bbox || mapBoundsToBBox(), gridSize, casualtiesGrid);
+        }
         else clearVizLayers();
     } catch (e) { console.warn('viz error', e); }
 }
@@ -2046,38 +2074,21 @@ function togglePanel(buttonId, bodyId) {
     try {
         const bAncestor = btn.closest('[id$="Panel"]');
         if (bAncestor) panel = bAncestor;
-    } catch (e) {}
+    } catch (e) { }
 
     btn.addEventListener('click', () => {
         const closed = body.classList.toggle('hidden');
-        try { if (panel) panel.classList.toggle('collapsed', closed); } catch (e) {}
+        try { if (panel) panel.classList.toggle('collapsed', closed); } catch (e) { }
         // update button glyph consistently
         btn.textContent = closed ? '▸' : '▾';
         // ensure focus and accessibility
-        try { btn.setAttribute('aria-expanded', String(!closed)); } catch (e) {}
+        try { btn.setAttribute('aria-expanded', String(!closed)); } catch (e) { }
     });
 }
 
 // initialize panel toggles (left and weapon panels)
 togglePanel('leftPanelToggle', 'leftPanelBody');
 togglePanel('weaponPanelToggle', 'weaponPanelBody');
-
-// Session buttons added to UI
-const saveSessionBtn = document.getElementById('saveSessionBtn');
-const loadSessionBtn = document.getElementById('loadSessionBtn');
-const clearSessionBtn = document.getElementById('clearSessionBtn');
-if (saveSessionBtn) saveSessionBtn.addEventListener('click', () => { saveAppState(); showToast('Phiên đã được lưu.', 'success'); });
-if (loadSessionBtn) loadSessionBtn.addEventListener('click', () => { loadAppState(); showToast('Đang tải phiên (xem console để biết trạng thái).', 'info', 4000); });
-if (clearSessionBtn) clearSessionBtn.addEventListener('click', () => {
-    const key = 'maplook_state_v1';
-    localStorage.removeItem(key);
-    // also clear current scene objects
-    try { weaponSim.clearImpacts(); } catch (e) { }
-    try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) { }
-    // remove terrain from scene and clear terrainGrid
-    try { if (terrain) { scene.remove(terrain); terrain = null; } terrainGrid = null; lastBBox = null; lastGridSize = null; } catch (e) { }
-    showToast('Phiên đã bị xóa.', 'success');
-});
 
 // Simple toast helper
 function showToast(message, type = 'info', duration = 3000) {
@@ -2125,5 +2136,41 @@ function showToast(message, type = 'info', duration = 3000) {
         try { alert(message); } catch (e2) { }
     }
 }
+
+// Session buttons added to UI
+const saveSessionBtn = document.getElementById('saveSessionBtn');
+const loadSessionBtn = document.getElementById('loadSessionBtn');
+const clearSessionBtn = document.getElementById('clearSessionBtn');
+if (saveSessionBtn) saveSessionBtn.addEventListener('click', () => {
+    showOverlay('Đang lưu phiên...', 'Đang ghi trạng thái vào bộ nhớ cục bộ');
+    try {
+        saveAppState();
+        showToast('Phiên đã được lưu.', 'success');
+    } catch (e) {
+        showToast('Lỗi khi lưu phiên', 'error');
+    } finally {
+        hideOverlay();
+    }
+});
+if (loadSessionBtn) loadSessionBtn.addEventListener('click', () => {
+    showOverlay('Đang phục hồi phiên...', 'Khôi phục dữ liệu bản đồ và vật thể 3D');
+    setTimeout(() => {
+        try {
+            loadAppState();
+        } catch (e) { }
+        finally {
+            hideOverlay();
+        }
+    }, 100);
+});
+if (clearSessionBtn) clearSessionBtn.addEventListener('click', () => {
+    localStorage.clear();
+    // also clear current scene objects
+    try { weaponSim.clearImpacts(); } catch (e) { }
+    try { for (const b of buildings) scene.remove(b); buildings = []; } catch (e) { }
+    // remove terrain from scene and clear terrainGrid
+    try { if (terrain) { scene.remove(terrain); terrain = null; } terrainGrid = null; lastBBox = null; lastGridSize = null; } catch (e) { }
+    showToast('Phiên đã bị xóa.', 'success');
+});
 
 export { };

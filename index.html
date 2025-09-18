@@ -55,12 +55,16 @@
         }
     </style>
     <script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js"
-  }
-}
-</script>
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js"
+        }
+    }
+    </script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <!-- Leaflet.heat for heatmap visualization -->
+    <script src="https://cdn.jsdelivr.net/gh/Leaflet/Leaflet.heat/dist/leaflet-heat.js"></script>
 </head>
 
 <body class="bg-gray-900 text-white">
@@ -156,8 +160,15 @@
                     </div>
                 </div>
             </div>
-            <div id="restoreOverlay" class="hidden absolute inset-0 flex items-center justify-center bg-black/70 z-60">
-                <div class="text-white text-lg bg-black/60 p-4 rounded">Đang phục hồi phiên làm việc...</div>
+            <div id="restoreOverlay" class="hidden fixed inset-0 flex items-center justify-center bg-black/80"
+                style="z-index:9999;">
+                <div class="flex items-center space-x-4 bg-black/60 p-4 rounded">
+                    <div class="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <div>
+                        <div id="restoreOverlayText" class="text-white text-lg">Đang phục hồi phiên làm việc...</div>
+                        <div id="restoreOverlayDetail" class="text-gray-300 text-sm mt-1">Vui lòng chờ...</div>
+                    </div>
+                </div>
             </div>
             <div id="weaponPanel" class="absolute top-2 right-2 bg-black/50 p-2 rounded">
                 <div class="flex items-center justify-between mb-2">
@@ -238,12 +249,6 @@
     <!-- Toast container for unobtrusive notifications -->
     <div id="toastContainer" class="fixed top-4 right-4 z-60 flex flex-col items-end space-y-2 pointer-events-none">
     </div>
-
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-    <!-- Leaflet.heat for heatmap visualization -->
-    <script src="https://cdn.jsdelivr.net/gh/Leaflet/Leaflet.heat/dist/leaflet-heat.js"></script>
-    <!-- Three.js (module build) -->
 </body>
 <script type="module" src="./src/main.js"></script>
 
