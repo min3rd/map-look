@@ -12,6 +12,34 @@ function latLonToMeters(lat, lon, origin) {
     return { x, y };
 }
 
+// Helper: convert a lat/lon bbox [south,west,north,east] to local meter bounds using an origin
+function getLocalBoundsForBBox(bbox, origin) {
+    if (!bbox || bbox.length !== 4 || !origin) return null;
+    const [s, w, n, e] = bbox;
+    const p1 = latLonToMeters(s, w, origin);
+    const p2 = latLonToMeters(n, e, origin);
+    const minX = Math.min(p1.x, p2.x), maxX = Math.max(p1.x, p2.x);
+    const minY = Math.min(p1.y, p2.y), maxY = Math.max(p1.y, p2.y);
+    return { minX, minY, maxX, maxY };
+}
+
+function ptsIntersectBounds(pts, bounds) {
+    if (!pts || !pts.length || !bounds) return true;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+        if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+    }
+    if (minX === Infinity) return true;
+    // test AABB intersection
+    if (maxX < bounds.minX || minX > bounds.maxX) return false;
+    if (maxY < bounds.minY || minY > bounds.maxY) return false;
+    return true;
+}
+
 let map, selectionLayer, startPoint, rect, isDrawing = false;
 let buildings = [];
 let scene, camera, renderer, controls;
@@ -462,8 +490,6 @@ function showOverlay(mainText, detailText) {
 
 function hideOverlay() { try { const ov = document.getElementById('restoreOverlay'); if (ov) ov.classList.add('hidden'); } catch (e) { } }
 
-function setOverlayDetail(detailText) { try { const det = document.getElementById('restoreOverlayDetail'); if (det) det.textContent = detailText; } catch (e) { } }
-
 function parseOSM(osm, bboxCenter) {
     const nodes = new Map();
     const waysIndex = new Map();
@@ -637,7 +663,9 @@ function addForestsToScene(forestMeshes) {
     if (!scene.userData.forests) scene.userData.forests = [];
     for (const r of scene.userData.forests) scene.remove(r);
     scene.userData.forests = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const f of forestMeshes) {
+        try { if (selBounds && f.pts && !ptsIntersectBounds(f.pts, selBounds)) continue; } catch (e) { }
         if (!f.pts || f.pts.length < 3) continue;
         try {
             const shape = new THREE.Shape(f.pts.map(p => new THREE.Vector2(p.x, p.y)));
@@ -656,9 +684,11 @@ function addTreesToScene(treePoints) {
     if (!scene.userData.trees) scene.userData.trees = [];
     for (const r of scene.userData.trees) scene.remove(r);
     scene.userData.trees = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     const geom = new THREE.ConeGeometry(0.6, 2.0, 6);
     const mat = new THREE.MeshLambertMaterial({ color: 0x227722 });
     for (const t of treePoints) {
+        try { if (selBounds && t.pos && (t.pos.x < selBounds.minX || t.pos.x > selBounds.maxX || t.pos.y < selBounds.minY || t.pos.y > selBounds.maxY)) continue; } catch (e) { }
         const h = getTerrainHeightAt(t.pos.x, t.pos.y) || 0;
         const m = new THREE.Mesh(geom, mat);
         m.position.set(t.pos.x, t.pos.y, h + 1);
@@ -670,7 +700,9 @@ function addPortsToScene(portMeshes) {
     if (!scene.userData.ports) scene.userData.ports = [];
     for (const r of scene.userData.ports) scene.remove(r);
     scene.userData.ports = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const p of portMeshes) {
+        try { if (selBounds && p.pts && !ptsIntersectBounds(p.pts, selBounds)) continue; } catch (e) { }
         if (!p.pts || !p.pts.length) continue;
         const shape = new THREE.Shape(p.pts.map(pt => new THREE.Vector2(pt.x, pt.y)));
         const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
@@ -1292,7 +1324,12 @@ function addBuildingsToScene(meshes) {
     for (const b of buildings) scene.remove(b);
     buildings = [];
 
+    // compute bounds for selection area (if available)
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
+
     for (const m of meshes) {
+        // if selection bounds exist, skip meshes completely outside selection
+        try { if (selBounds && m.pts && !ptsIntersectBounds(m.pts, selBounds)) continue; } catch (e) { }
         const shape = new THREE.Shape();
         m.pts.forEach((p, i) => {
             if (i === 0) shape.moveTo(p.x, p.y);
@@ -1368,6 +1405,7 @@ function addRoadsToScene(roadMeshes) {
     if (!scene.userData.roads) scene.userData.roads = [];
     for (const r of scene.userData.roads) scene.remove(r);
     scene.userData.roads = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     // helper: compute normals per segment
     function segNormals(pts) {
         const normals = [];
@@ -1403,6 +1441,7 @@ function addRoadsToScene(roadMeshes) {
 
     for (const r of roadMeshes) {
         if (!r.pts || r.pts.length < 2) continue;
+        try { if (selBounds && !ptsIntersectBounds(r.pts, selBounds)) continue; } catch (e) { }
         const tags = r.tags || {};
         const pts = r.pts.map(p => ({ x: p.x, y: p.y }));
         const normals = segNormals(pts);
@@ -1500,7 +1539,9 @@ function addWaterToScene(waterMeshes) {
     if (!scene.userData.water) scene.userData.water = [];
     for (const r of scene.userData.water) scene.remove(r);
     scene.userData.water = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const w of waterMeshes) {
+        try { if (selBounds && w.pts && !ptsIntersectBounds(w.pts, selBounds)) continue; } catch (e) { }
         // If polygon (lake/reservoir) - create a thin mesh that conforms to terrain by sampling height per vertex
         if (w.pts.length >= 3) {
             // Build a geometry from the polygon vertices with Z sampled from terrain
@@ -1602,7 +1643,9 @@ function addHillsToScene(hillMeshes) {
     if (!scene.userData.hills) scene.userData.hills = [];
     for (const r of scene.userData.hills) scene.remove(r);
     scene.userData.hills = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const h of hillMeshes) {
+        try { if (selBounds && h.pts && !ptsIntersectBounds(h.pts, selBounds)) continue; } catch (e) { }
         // approximate hill by placing a cone at centroid
         const xs = h.pts.map(p => p.x), ys = h.pts.map(p => p.y);
         const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -1620,7 +1663,9 @@ function addParksToScene(parkMeshes) {
     if (!scene.userData.parks) scene.userData.parks = [];
     for (const r of scene.userData.parks) scene.remove(r);
     scene.userData.parks = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const p of parkMeshes) {
+        try { if (selBounds && p.pts && !ptsIntersectBounds(p.pts, selBounds)) continue; } catch (e) { }
         if (p.pts.length < 3) continue;
         const shape = new THREE.Shape();
         p.pts.forEach((pt, i) => { if (i === 0) shape.moveTo(pt.x, pt.y); else shape.lineTo(pt.x, pt.y); });
@@ -1638,7 +1683,9 @@ function addPeaksToScene(points) {
     if (!scene.userData.peaks) scene.userData.peaks = [];
     for (const r of scene.userData.peaks) scene.remove(r);
     scene.userData.peaks = [];
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     for (const p of points) {
+        try { if (selBounds && p.pos && (p.pos.x < selBounds.minX || p.pos.x > selBounds.maxX || p.pos.y < selBounds.minY || p.pos.y > selBounds.maxY)) continue; } catch (e) { }
         const geom = new THREE.ConeGeometry(5, 20, 8);
         const mat = new THREE.MeshLambertMaterial({ color: 0x885544 });
         const mesh = new THREE.Mesh(geom, mat);
@@ -1665,8 +1712,10 @@ function addInfraToScene(infra) {
     const hospitalMat = new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.1, roughness: 0.8 });
     const schoolMat = new THREE.MeshStandardMaterial({ color: 0x4444ff, metalness: 0.1, roughness: 0.8 });
 
+    const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
     if (infra.hospitals) {
         for (const h of infra.hospitals) {
+            try { if (selBounds && h.pos && (h.pos.x < selBounds.minX || h.pos.x > selBounds.maxX || h.pos.y < selBounds.minY || h.pos.y > selBounds.maxY)) continue; } catch (e) { }
             if (h.pos) {
                 const m = new THREE.Mesh(sphereGeom, hospitalMat);
                 const hh = getTerrainHeightAt(h.pos.x, h.pos.y) || 0;
@@ -1675,6 +1724,7 @@ function addInfraToScene(infra) {
                 addRecorded(m);
                 // labels removed by user request
             } else if (h.pts && h.pts.length) {
+                try { if (selBounds && !ptsIntersectBounds(h.pts, selBounds)) continue; } catch (e) { }
                 // extrude area
                 const shape = new THREE.Shape(h.pts.map(p => new THREE.Vector2(p.x, p.y)));
                 const geom = new THREE.ExtrudeGeometry(shape, { depth: 4, bevelEnabled: false });
@@ -1848,7 +1898,6 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         lastOrigin = { lat: center[0], lon: center[1] };
         // build terrain after parsing so we can merge water into terrain
         try {
-            try { setOverlayDetail('Đang xây dựng địa hình (lấy cao độ)...'); } catch (e) { }
             await buildTerrainForBBox(bbox, 48, parsed.water);
         } catch (terrErr) {
         }
