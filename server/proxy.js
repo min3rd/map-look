@@ -51,4 +51,4 @@ app.all('/opentopo', async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`OpenTopo proxy running at http://localhost:${port}/opentopo`));
+app.listen(port, () => { /* proxy started on port */ });

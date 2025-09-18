@@ -14,7 +14,6 @@ function latLonToMeters(lat, lon, origin) {
 let map, selectionLayer, startPoint, rect, isDrawing = false;
 let buildings = [];
 let scene, camera, renderer, controls;
-let pointerLocked = false;
 
 function initMap() {
     map = L.map('map').setView([21.028511, 105.804817], 16); // Hanoi default
@@ -52,7 +51,7 @@ function initMap() {
         isDrawing = false;
     });
     // If mouse leaves the map while drawing, cancel drawing and re-enable dragging
-    }
+}
 
 async function fetchOSM(bbox) {
     // bbox = south,west,north,east
@@ -323,42 +322,15 @@ let selectedDataset = 'srtm90m';
 // Fetch available OpenTopoData datasets and populate the UI selector
 async function loadOpenTopoDatasets() {
     const fallback = [
-        'aster30m','bkg200m','emod2018','etopo1','eudem25m','gebco2020','mapzen','ned10m','nzdem8m','srtm30m','srtm90m','test-dataset'
+        'aster30m', 'bkg200m', 'emod2018', 'etopo1', 'eudem25m', 'gebco2020', 'mapzen', 'ned10m', 'nzdem8m', 'srtm30m', 'srtm90m', 'test-dataset'
     ];
-    try {
-        const res = await fetch('https://api.opentopodata.org/datasets');
-        if (!res.ok) throw new Error('dataset list fetch failed');
-        const data = await res.json();
-        const sel = document.getElementById('datasetSelect');
-        if (!sel) return;
-        sel.innerHTML = '';
-        const list = Array.isArray(data.datasets) ? data.datasets : (Array.isArray(data.results) ? data.results : null);
-        if (list && list.length) {
-            for (const d of list) {
-                const name = d.name || d.dataset || d.id || d;
-                const opt = document.createElement('option');
-                opt.value = name;
-                opt.textContent = name + (d.description ? ' — ' + d.description : '');
-                sel.appendChild(opt);
-            }
-        } else {
-            for (const name of fallback) { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt); }
-        }
-        const hasSrtm = Array.from(sel.options).some(o => (o.value || '').toLowerCase() === 'srtm90m');
-        sel.value = hasSrtm ? 'srtm90m' : (sel.options.length ? sel.options[0].value : fallback[0]);
-        selectedDataset = sel.value;
-        sel.addEventListener('change', () => { selectedDataset = sel.value; console.log('Selected dataset:', selectedDataset); });
-        return;
-    } catch (e) {
-        console.warn('Failed to load OpenTopo datasets', e);
-    }
     const sel = document.getElementById('datasetSelect');
     if (sel) {
         sel.innerHTML = '';
         for (const name of fallback) { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt); }
         sel.value = fallback.includes('srtm90m') ? 'srtm90m' : fallback[0];
         selectedDataset = sel.value;
-        sel.addEventListener('change', () => { selectedDataset = sel.value; console.log('Selected dataset:', selectedDataset); });
+        sel.addEventListener('change', () => { selectedDataset = sel.value; /* dataset changed */ });
     }
 }
 
@@ -374,8 +346,8 @@ function addForestsToScene(forestMeshes) {
             const mat = new THREE.MeshLambertMaterial({ color: 0x2e8b57, opacity: 0.8, transparent: true });
             const mesh = new THREE.Mesh(geom, mat);
             // position slightly above terrain to avoid z-fight
-            let sumh=0,c=0; for(const p of f.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh+=hh;c++;}}
-            mesh.position.z = c? (sumh/c) : 0;
+            let sumh = 0, c = 0; for (const p of f.pts) { const hh = getTerrainHeightAt(p.x, p.y); if (!isNaN(hh)) { sumh += hh; c++; } }
+            mesh.position.z = c ? (sumh / c) : 0;
             scene.add(mesh); scene.userData.forests.push(mesh);
         } catch (e) { /* ignore complex shapes */ }
     }
@@ -405,8 +377,8 @@ function addPortsToScene(portMeshes) {
         const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false });
         const mat = new THREE.MeshLambertMaterial({ color: 0x888888, opacity: 0.9, transparent: true });
         const mesh = new THREE.Mesh(geom, mat);
-        let sumh=0,c=0; for(const pt of p.pts){const hh=getTerrainHeightAt(pt.x,pt.y); if(!isNaN(hh)){sumh+=hh;c++;}}
-        mesh.position.z = c? (sumh/c) : 0;
+        let sumh = 0, c = 0; for (const pt of p.pts) { const hh = getTerrainHeightAt(pt.x, pt.y); if (!isNaN(hh)) { sumh += hh; c++; } }
+        mesh.position.z = c ? (sumh / c) : 0;
         scene.add(mesh); scene.userData.ports.push(mesh);
     }
 }
@@ -471,11 +443,11 @@ async function fetchElevationPoints(points) {
             break;
         }
 
-        console.log('fetchElevationPoints: batch', i, 'batchSize', batch.length, 'responseKeys', Object.keys(data || {}));
+        /* fetchElevationPoints: batch info (removed) */
 
         // Parse response: support GeoJSON FeatureCollection (features[].properties.elevation) or results array
         if (data && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            console.log('fetchElevationPoints: FeatureCollection features.length=', data.features.length);
+            /* FeatureCollection features length logged (removed) */
             // Build a features array with lat,lon,elev
             const feats = [];
             for (const f of data.features) {
@@ -510,7 +482,7 @@ async function fetchElevationPoints(points) {
                     if (bestIdx >= 0) { out.push(feats[bestIdx].elev); used[bestIdx] = true; }
                     else out.push(0);
                 }
-                console.log('fetchElevationPoints: assigned one-to-one for batch', i, 'appended', batch.length, 'elevs');
+                /* assigned one-to-one for batch (removed) */
             } else {
                 // fallback: try exact lat/lon match at 6-decimal precision first
                 const map = new Map();
@@ -527,13 +499,13 @@ async function fetchElevationPoints(points) {
                     }
                     if (bestIdx >= 0) out.push(feats[bestIdx].elev); else out.push(0);
                 }
-                console.log('fetchElevationPoints: fallback assignment for batch', i, 'feats', feats.length, 'appended', batch.length, 'elevs');
+                /* fallback assignment for batch (removed) */
             }
         } else if (data && Array.isArray(data.results)) {
             // results[] may be same length or shorter; map robustly to requested points
             if (data.results.length === batch.length) {
                 for (const r of data.results) out.push(r.elevation === null ? 0 : r.elevation);
-                console.log('fetchElevationPoints: results[] matched batch length', batch.length);
+                /* results[] matched batch length (removed) */
             } else {
                 // build feats from results and nearest-match to batch points
                 const feats = [];
@@ -652,7 +624,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
     function pointToPolylineDist(x, y, pts) {
         let best = Infinity;
         for (let k = 0; k < pts.length - 1; k++) {
-            const x1 = pts[k].x, y1 = pts[k].y; const x2 = pts[k+1].x, y2 = pts[k+1].y;
+            const x1 = pts[k].x, y1 = pts[k].y; const x2 = pts[k + 1].x, y2 = pts[k + 1].y;
             const A = x - x1, B = y - y1, C = x2 - x1, D = y2 - y1;
             const dot = A * C + B * D;
             const len2 = C * C + D * D;
@@ -712,7 +684,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
                     for (const v of w.pts) {
                         let bestD = Infinity, bi = 0, bj = 0;
                         for (let jj = 0; jj < ny; jj++) for (let ii = 0; ii < nx; ii++) {
-                            const dx = xyGrid[jj][ii].x - v.x, dy = xyGrid[jj][ii].y - v.y; const d = dx*dx + dy*dy;
+                            const dx = xyGrid[jj][ii].x - v.x, dy = xyGrid[jj][ii].y - v.y; const d = dx * dx + dy * dy;
                             if (d < bestD) { bestD = d; bi = ii; bj = jj; }
                         }
                         const h = (heights[bj] && typeof heights[bj][bi] === 'number') ? heights[bj][bi] : null;
@@ -744,7 +716,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
                         // assign height to nearest polyline vertex height (use nearest vertex)
                         let bestD = Infinity, bi = 0;
                         for (let k = 0; k < w.pts.length; k++) {
-                            const dx = xy.x - w.pts[k].x, dy = xy.y - w.pts[k].y; const dd = dx*dx + dy*dy;
+                            const dx = xy.x - w.pts[k].x, dy = xy.y - w.pts[k].y; const dd = dx * dx + dy * dy;
                             if (dd < bestD) { bestD = dd; bi = k; }
                         }
                         // approximate river height by nearest grid to that polyline vertex
@@ -752,7 +724,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
                         let bestD2 = Infinity, gi = 0, gj = 0;
                         for (let jj = 0; jj < ny; jj++) for (let ii = 0; ii < nx; ii++) {
                             const p2 = latLonToMeters(lats[jj], lons[ii], origin);
-                            const dx = p2.x - pv.x, dy = p2.y - pv.y; const d2 = dx*dx + dy*dy;
+                            const dx = p2.x - pv.x, dy = p2.y - pv.y; const d2 = dx * dx + dy * dy;
                             if (d2 < bestD2) { bestD2 = d2; gi = ii; gj = jj; }
                         }
                         const ph = (heights[gj] && typeof heights[gj][gi] === 'number') ? heights[gj][gi] : heights[j][i];
@@ -771,7 +743,7 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
         if (h > maxH) maxH = h;
     }
     if (minH === Infinity) { minH = 0; maxH = 0; }
-    console.log('Terrain heights: min=', minH, 'max=', maxH);
+    /* Terrain heights logged (removed) */
 
     // choose a visual vertical scale: if terrain is very flat, exaggerate for visibility
     const delta = maxH - minH;
@@ -849,101 +821,6 @@ async function buildTerrainForBBox(bbox, gridSize = 64, waterMeshes = null) {
     scene.add(terrain);
 
     terrainGrid = { nx, ny, lats, lons, heights, origin, dx: gridDx, dy: gridDy, minX, minY, minH, visualScale, xyGrid };
-
-    // diagnostic samples
-    const sample = (i, j) => ({ i, j, h: heights[j] && heights[j][i] });
-    console.log('Terrain samples:', sample(0,0), sample(nx-1,0), sample(0,ny-1), sample(nx-1,ny-1), sample(Math.floor(nx/2), Math.floor(ny/2)));
-
-    // Temporary debug visualizer: place small spheres at each grid vertex colored by height
-    try {
-        // visualizeTerrainDebug(terrainGrid);
-    } catch (e) { /* ignore in prod */ }
-}
-
-// Debug helper: visualize terrain grid vertices and log large adjacent jumps
-function visualizeTerrainDebug(grid) {
-    if (!grid || !grid.nx) return;
-    // remove any previous debug group
-    if (scene.userData.terrainDebugGroup) { scene.remove(scene.userData.terrainDebugGroup); scene.userData.terrainDebugGroup = null; }
-    const g = new THREE.Group();
-    const sphGeom = new THREE.SphereGeometry(Math.max(0.5, Math.min(2, (grid.dx || 1) * 0.1)), 6, 6);
-    let jumps = [];
-    const allHeights = [];
-    for (let j = 0; j < grid.ny; j++) {
-        for (let i = 0; i < grid.nx; i++) {
-            const xy = grid.xyGrid[j][i];
-            const h = (grid.heights[j] && typeof grid.heights[j][i] === 'number') ? grid.heights[j][i] : grid.minH;
-            allHeights.push(h);
-            const z = (h - grid.minH) * grid.visualScale;
-            const t = Math.max(0, Math.min(1, (h - grid.minH) / Math.max(1, (grid.visualScale))));
-            const color = new THREE.Color().setHSL(0.6 - 0.6 * t, 0.6, 0.5);
-            const mat = new THREE.MeshBasicMaterial({ color });
-            const s = new THREE.Mesh(sphGeom, mat);
-            s.position.set(xy.x, xy.y, z);
-            g.add(s);
-            // check adjacency to right and down
-            if (i < grid.nx - 1) {
-                const h2 = grid.heights[j][i+1] || h;
-                if (Math.abs(h2 - h) > 50) jumps.push({ i, j, i2: i+1, j2: j, dh: h2 - h });
-            }
-            if (j < grid.ny - 1) {
-                const h2 = grid.heights[j+1][i] || h;
-                if (Math.abs(h2 - h) > 50) jumps.push({ i, j, i2: i, j2: j+1, dh: h2 - h });
-            }
-        }
-    }
-    scene.add(g);
-    scene.userData.terrainDebugGroup = g;
-    console.log('Terrain debug: total vertices=', grid.nx * grid.ny, 'large adjacency jumps=', jumps.length);
-    if (jumps.length) console.table(jumps.slice(0,50));
-
-    // analyze height clusters
-    if (allHeights.length) {
-        // build histogram of rounded heights
-        const rounded = allHeights.map(h => Math.round(h));
-        const counts = new Map();
-        for (const v of rounded) counts.set(v, (counts.get(v) || 0) + 1);
-        const entries = Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]);
-        console.log('Height histogram (top 10):', entries.slice(0,10));
-        // detect if there are two dominant clusters
-        if (entries.length > 1) {
-            const top = entries[0][0], topCnt = entries[0][1];
-            const second = entries[1][0], secondCnt = entries[1][1];
-            if (topCnt > 0 && secondCnt > 0 && (topCnt + secondCnt) / allHeights.length > 0.5) {
-                console.log('Detected two dominant height clusters:', { top, topCnt, second, secondCnt });
-                // check row means and column means to see if pattern is by rows or columns
-                const rowMeans = [];
-                for (let j = 0; j < grid.ny; j++) {
-                    let s=0,c=0; for(let i=0;i<grid.nx;i++){ const v=grid.heights[j][i]||grid.minH; s+=v; c++; } rowMeans.push(s/c);
-                }
-                const colMeans = [];
-                for (let i = 0; i < grid.nx; i++) {
-                    let s=0,c=0; for(let j=0;j<grid.ny;j++){ const v=grid.heights[j][i]||grid.minH; s+=v; c++; } colMeans.push(s/c);
-                }
-                // find large jumps along rows
-                let rowSplit = -1; for (let j=0;j<rowMeans.length-1;j++){ if (Math.abs(rowMeans[j+1]-rowMeans[j]) > Math.max(5, Math.abs(rowMeans[j])*0.1)) { rowSplit = j; break; } }
-                let colSplit = -1; for (let i=0;i<colMeans.length-1;i++){ if (Math.abs(colMeans[i+1]-colMeans[i]) > Math.max(5, Math.abs(colMeans[i])*0.1)) { colSplit = i; break; } }
-                console.log('Row split index (first large jump):', rowSplit, 'Col split index:', colSplit);
-            }
-        }
-    }
-
-    // highlight jump positions with red spheres for clarity
-    if (jumps.length) {
-        const redMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const big = new THREE.SphereGeometry(Math.max(0.8, (grid.dx || 1) * 0.15), 8, 8);
-        const jumpGroup = new THREE.Group();
-        for (const jm of jumps) {
-            const xy = grid.xyGrid[jm.j][jm.i];
-            const h = (grid.heights[jm.j] && typeof grid.heights[jm.j][jm.i] === 'number') ? grid.heights[jm.j][jm.i] : grid.minH;
-            const z = (h - grid.minH) * grid.visualScale;
-            const s = new THREE.Mesh(big, redMat);
-            s.position.set(xy.x, xy.y, z + 0.5);
-            jumpGroup.add(s);
-        }
-        scene.add(jumpGroup);
-        scene.userData.terrainDebugJumps = jumpGroup;
-    }
 }
 
 function getTerrainHeightAt(x, y) {
@@ -980,6 +857,20 @@ function getTerrainHeightAt(x, y) {
     const h = h0 * (1 - sy) + h1 * sy;
     // convert to same vertical space as terrain mesh: (h - minH) * visualScale
     return (h - minH) * visualScale;
+}
+
+// Robust sampler: raycast down onto the terrain mesh to get exact surface Z (world units)
+const _terrainRaycaster = new THREE.Raycaster();
+function sampleTerrainHeightFromMesh(x, y) {
+    if (!terrain || !terrain.geometry) return getTerrainHeightAt(x, y);
+    // choose a high origin above expected max terrain height
+    const top = 10000;
+    const origin = new THREE.Vector3(x, y, top);
+    const dir = new THREE.Vector3(0, 0, -1);
+    _terrainRaycaster.set(origin, dir);
+    const intersects = _terrainRaycaster.intersectObject(terrain, true);
+    if (intersects && intersects.length) return intersects[0].point.z;
+    return getTerrainHeightAt(x, y);
 }
 
 function initThree() {
@@ -1052,7 +943,17 @@ function addBuildingsToScene(meshes) {
             else shape.lineTo(p.x, p.y);
         });
         const extrude = new THREE.ExtrudeGeometry(shape, { depth: m.height, bevelEnabled: false, steps: 1 });
-        extrude.translate(0, 0, 0);
+        // modify geometry so base follows terrain: for each vertex, add terrain height at its X,Y to its Z
+        try {
+            const posAttr = extrude.attributes.position;
+            for (let vi = 0; vi < posAttr.count; vi++) {
+                const vx = posAttr.getX(vi), vy = posAttr.getY(vi), vz = posAttr.getZ(vi);
+                const h = (typeof sampleTerrainHeightFromMesh === 'function') ? sampleTerrainHeightFromMesh(vx, vy) : getTerrainHeightAt(vx, vy);
+                if (!isNaN(h)) posAttr.setZ(vi, vz + h);
+            }
+            extrude.attributes.position.needsUpdate = true;
+            extrude.computeVertexNormals();
+        } catch (e) { /* if geometry not as expected, fallback to centroid placement below */ }
         let mat;
         if (buildingTexture) {
             // clone texture per-building so repeat/wrap changes don't affect others
@@ -1072,11 +973,13 @@ function addBuildingsToScene(meshes) {
             mat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
         }
         const mesh = new THREE.Mesh(extrude, mat);
-        // align to terrain height at centroid if terrain available
-        const centroidX = m.pts.reduce((s, p) => s + p.x, 0) / Math.max(1, m.pts.length);
-        const centroidY = m.pts.reduce((s, p) => s + p.y, 0) / Math.max(1, m.pts.length);
-        const baseHeight = (typeof getTerrainHeightAt === 'function') ? getTerrainHeightAt(centroidX, centroidY) : 0;
-        mesh.position.z = baseHeight;
+        // If extrude geometry modification failed, fall back to centroid-based placement
+        if (!extrude.attributes || !extrude.attributes.position) {
+            const centroidX = m.pts.reduce((s, p) => s + p.x, 0) / Math.max(1, m.pts.length);
+            const centroidY = m.pts.reduce((s, p) => s + p.y, 0) / Math.max(1, m.pts.length);
+            const baseHeight = (typeof getTerrainHeightAt === 'function') ? getTerrainHeightAt(centroidX, centroidY) : 0;
+            mesh.position.z = baseHeight;
+        }
         scene.add(mesh);
         buildings.push(mesh);
         // labels removed by user request
@@ -1163,12 +1066,26 @@ function addRoadsToScene(roadMeshes) {
         for (let i = rightPts.length - 1; i >= 0; i--) shape.lineTo(rightPts[i].x, rightPts[i].y);
 
         const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: false });
+        // raise road geometry so base follows terrain per-vertex
+        try {
+            const posAttr = geom.attributes.position;
+            for (let vi = 0; vi < posAttr.count; vi++) {
+                const vx = posAttr.getX(vi), vy = posAttr.getY(vi), vz = posAttr.getZ(vi);
+                const h = (typeof sampleTerrainHeightFromMesh === 'function') ? sampleTerrainHeightFromMesh(vx, vy) : getTerrainHeightAt(vx, vy);
+                if (!isNaN(h)) posAttr.setZ(vi, vz + h + 0.02);
+            }
+            geom.attributes.position.needsUpdate = true;
+            geom.computeVertexNormals();
+        } catch (e) {
+            // fallback to average centerline height
+            let avgH = 0; let hhCount = 0;
+            for (const p of pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { avgH += h; hhCount++; } }
+            if (hhCount) avgH /= hhCount; else avgH = 0;
+            // will set mesh.position below
+            geom.userData = { fallbackZ: avgH + 0.02 };
+        }
         const mesh = new THREE.Mesh(geom, roadMat);
-    // compute average terrain height along centerline
-    let avgH = 0; let hhCount = 0;
-    for (const p of pts) { const h = getTerrainHeightAt(p.x, p.y); if (!isNaN(h)) { avgH += h; hhCount++; } }
-    if (hhCount) avgH /= hhCount; else avgH = 0;
-    mesh.position.z = avgH + 0.02;
+        if (geom.userData && typeof geom.userData.fallbackZ === 'number') mesh.position.z = geom.userData.fallbackZ;
         scene.add(mesh);
         scene.userData.roads.push(mesh);
 
@@ -1176,7 +1093,7 @@ function addRoadsToScene(roadMeshes) {
         try {
             const lanes = info.lanes || 1;
             if (lanes > 1) {
-                const linePts = pts.map(p => new THREE.Vector3(p.x, p.y, avgH + 0.12));
+                const linePts = pts.map(p => new THREE.Vector3(p.x, p.y, (getTerrainHeightAt(p.x, p.y) || 0) + 0.12));
                 const lineGeom = new THREE.BufferGeometry().setFromPoints(linePts);
                 // compute dashed material color
                 const isOneWay = tags.oneway === 'yes' || tags.oneway === '1' || tags.oneway === 'true';
@@ -1192,12 +1109,12 @@ function addRoadsToScene(roadMeshes) {
         }
         // draw dark border along edges for contrast
         try {
-            const leftBorderPts = leftPts.map(p => new THREE.Vector3(p.x, p.y, 0.025));
-            const rightBorderPts = rightPts.map(p => new THREE.Vector3(p.x, p.y, 0.025));
+            const leftBorderPts = leftPts.map(p => new THREE.Vector3(p.x, p.y, (getTerrainHeightAt(p.x, p.y) || 0) + 0.025));
+            const rightBorderPts = rightPts.map(p => new THREE.Vector3(p.x, p.y, (getTerrainHeightAt(p.x, p.y) || 0) + 0.025));
             const borderMat = new THREE.LineBasicMaterial({ color: 0x111111 });
             // set border z to average height as well
-            const leftGeom = new THREE.BufferGeometry().setFromPoints(leftBorderPts.map(p=>new THREE.Vector3(p.x,p.y,avgH+0.025)));
-            const rightGeom = new THREE.BufferGeometry().setFromPoints(rightBorderPts.map(p=>new THREE.Vector3(p.x,p.y,avgH+0.025)));
+            const leftGeom = new THREE.BufferGeometry().setFromPoints(leftBorderPts);
+            const rightGeom = new THREE.BufferGeometry().setFromPoints(rightBorderPts);
             const leftLine = new THREE.Line(leftGeom, borderMat);
             const rightLine = new THREE.Line(rightGeom, borderMat);
             scene.add(leftLine); scene.userData.roads.push(leftLine);
@@ -1270,7 +1187,7 @@ function addWaterToScene(waterMeshes) {
             });
             // create a smooth curve and sample points along it
             const curve = new THREE.CatmullRomCurve3(points);
-            const divisions = Math.max( Math.floor(points.length * 4), 8 );
+            const divisions = Math.max(Math.floor(points.length * 4), 8);
             const sampled = curve.getPoints(divisions);
             // create a ribbon-like geometry by offsetting left/right along the curve using Frenet frames
             const leftPts = [], rightPts = [];
@@ -1340,7 +1257,7 @@ function addParksToScene(parkMeshes) {
         mesh.position.z = 0;
         scene.add(mesh);
         scene.userData.parks.push(mesh);
-    // labels removed by user request
+        // labels removed by user request
     }
 }
 
@@ -1355,7 +1272,7 @@ function addPeaksToScene(points) {
         mesh.position.set(p.pos.x, p.pos.y, 10);
         scene.add(mesh);
         scene.userData.peaks.push(mesh);
-    // labels removed by user request
+        // labels removed by user request
     }
 }
 
@@ -1391,8 +1308,8 @@ function addInfraToScene(infra) {
                 const mat = new THREE.MeshStandardMaterial({ color: 0xff6666, opacity: 0.9, transparent: true });
                 const mesh = new THREE.Mesh(geom, mat);
                 // position polys to terrain average
-                let sumh=0,c=0; for(const p of h.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh+=hh;c++;}}
-                const base = c? (sumh/c):0;
+                let sumh = 0, c = 0; for (const p of h.pts) { const hh = getTerrainHeightAt(p.x, p.y); if (!isNaN(hh)) { sumh += hh; c++; } }
+                const base = c ? (sumh / c) : 0;
                 mesh.position.z = base;
                 addRecorded(mesh);
                 const xs = h.pts.map(p => p.x), ys = h.pts.map(p => p.y);
@@ -1416,8 +1333,8 @@ function addInfraToScene(infra) {
                 const geom = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false });
                 const mat = new THREE.MeshStandardMaterial({ color: 0x6666ff, opacity: 0.85, transparent: true });
                 const mesh = new THREE.Mesh(geom, mat);
-                let sumh2=0,c2=0; for(const p of s.pts){const hh=getTerrainHeightAt(p.x,p.y); if(!isNaN(hh)){sumh2+=hh;c2++;}}
-                const base2 = c2 ? (sumh2/c2) : 0;
+                let sumh2 = 0, c2 = 0; for (const p of s.pts) { const hh = getTerrainHeightAt(p.x, p.y); if (!isNaN(hh)) { sumh2 += hh; c2++; } }
+                const base2 = c2 ? (sumh2 / c2) : 0;
                 mesh.position.z = base2;
                 addRecorded(mesh);
                 const xs = s.pts.map(p => p.x), ys = s.pts.map(p => p.y);
@@ -1550,10 +1467,15 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         // render based on selections
         if (parsed.buildings && document.getElementById('cb_building').checked) addBuildingsToScene(parsed.buildings);
         if (parsed.roads && document.getElementById('cb_road').checked) addRoadsToScene(parsed.roads);
-    // water is now merged into the terrain; do not create a separate water layer
+        // water is now merged into the terrain; do not create a separate water layer
         if (parsed.parks && document.getElementById('cb_park').checked) addParksToScene(parsed.parks);
         if (parsed.peaks && document.getElementById('cb_mountain').checked) addPeaksToScene(parsed.peaks);
         if (parsed.hills && document.getElementById('cb_mountain').checked) addHillsToScene(parsed.hills);
+
+        // forest, trees, ports (if parsed)
+        if (parsed.forests && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addForestsToScene(parsed.forests);
+        if (parsed.trees && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addTreesToScene(parsed.trees);
+        if (parsed.ports && document.getElementById('cb_port') && document.getElementById('cb_port').checked) addPortsToScene(parsed.ports);
 
         // infra toggles
         if (parsed.infra) {
