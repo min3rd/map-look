@@ -15,6 +15,8 @@ function latLonToMeters(lat, lon, origin) {
 let map, selectionLayer, startPoint, rect, isDrawing = false;
 let buildings = [];
 let scene, camera, renderer, controls;
+let lastParsed = null;
+let lastOrigin = null;
 
 function initMap() {
     map = L.map('map').setView([21.028511, 105.804817], 16); // Hanoi default
@@ -62,7 +64,93 @@ function initMap() {
         const weaponType = document.getElementById('weaponSelect').value;
         const weapon = WEAPONS[weaponType];
         weaponSim.simulateImpact(weapon, e.latlng.lat, e.latlng.lng);
+        // persist impacts immediately so reload restores them
+        try { saveAppState(); } catch (err) { console.warn('saveAppState failed after impact', err); }
     });
+}
+
+// Persist application state to localStorage
+function saveAppState() {
+    try {
+        const key = 'maplook_state_v1';
+        const state = { parsed: null, origin: null, impacts: [] };
+        if (lastParsed) state.parsed = lastParsed;
+        if (lastOrigin) state.origin = lastOrigin;
+        // serialize impacts (weapon type, lat, lon)
+        if (weaponSim && Array.isArray(weaponSim.impacts)) {
+            for (const imp of weaponSim.impacts) {
+                if (!imp || !imp.position) continue;
+                const wt = imp.weapon && imp.weapon.type ? imp.weapon.type : (imp.weapon || '').toString();
+                state.impacts.push({ weapon: wt, lat: imp.position.lat, lon: imp.position.lon });
+            }
+        }
+        localStorage.setItem(key, JSON.stringify(state));
+    } catch (e) { console.warn('Failed to save state', e); }
+}
+
+// Restore state from localStorage if present. Recreates 3D scene objects and impacts.
+function loadAppState() {
+    try {
+        const key = 'maplook_state_v1';
+        const txt = localStorage.getItem(key);
+        if (!txt) return;
+        const state = JSON.parse(txt);
+        if (!state) return;
+        // restore parsed scene if available
+        if (state.parsed) {
+            lastParsed = state.parsed;
+            lastOrigin = state.origin || lastOrigin;
+            // add buildings, roads, parks etc if present - follow same add* functions
+            if (lastParsed.buildings && document.getElementById('cb_building') && document.getElementById('cb_building').checked) addBuildingsToScene(lastParsed.buildings);
+            if (lastParsed.roads && document.getElementById('cb_road') && document.getElementById('cb_road').checked) addRoadsToScene(lastParsed.roads);
+            if (lastParsed.parks && document.getElementById('cb_park') && document.getElementById('cb_park').checked) addParksToScene(lastParsed.parks);
+            if (lastParsed.peaks && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addPeaksToScene(lastParsed.peaks);
+            if (lastParsed.hills && document.getElementById('cb_mountain') && document.getElementById('cb_mountain').checked) addHillsToScene(lastParsed.hills);
+            if (lastParsed.forests && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addForestsToScene(lastParsed.forests);
+            if (lastParsed.trees && document.getElementById('cb_forest') && document.getElementById('cb_forest').checked) addTreesToScene(lastParsed.trees);
+            if (lastParsed.ports && document.getElementById('cb_port') && document.getElementById('cb_port').checked) addPortsToScene(lastParsed.ports);
+            // infra
+            if (lastParsed.infra) addInfraToScene(lastParsed.infra);
+            // set weaponSim fields
+            weaponSim.buildings = buildings;
+            weaponSim.scene = scene;
+            if (lastOrigin) weaponSim.origin = lastOrigin;
+
+            // If buildingTexture already loaded earlier, apply it to restored buildings
+            if (typeof buildingTexture !== 'undefined' && buildingTexture) {
+                for (const b of buildings) {
+                    try {
+                        const t = buildingTexture.clone();
+                        t.needsUpdate = true;
+                        if (b && b.material) { b.material.map = t; b.material.needsUpdate = true; }
+                    } catch (e) { }
+                }
+            }
+
+            // Ensure the scene has at least basic lighting (in case restore ran before initThree finished)
+            try {
+                const hasLight = scene.children.some(ch => ch.isLight || (ch.type && /Light$/.test(ch.type)));
+                if (!hasLight) {
+                    const hemiDef = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+                    hemiDef.position.set(0, 200, 0);
+                    scene.add(hemiDef);
+                    const dirDef = new THREE.DirectionalLight(0xffffff, 0.8);
+                    dirDef.position.set(-100, 100, 100);
+                    scene.add(dirDef);
+                }
+            } catch (e) { /* ignore if THREE not available */ }
+        }
+        // restore impacts
+        if (Array.isArray(state.impacts) && state.impacts.length) {
+            for (const imp of state.impacts) {
+                try {
+                    const w = WEAPONS[imp.weapon] || WEAPONS.bomb;
+                    // re-run impacts to recreate visuals and damage
+                    weaponSim.simulateImpact(w, imp.lat, imp.lon);
+                } catch (e) { console.warn('Failed restoring impact', e); }
+            }
+        }
+    } catch (e) { console.warn('Failed to load saved state', e); }
 }
 
 async function fetchOSM(bbox) {
@@ -1485,6 +1573,9 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         showLoader(true);
         const osm = await fetchOSM(bbox);
         const parsed = parseOSM(osm, center);
+            // persist parsed data for session restore
+            lastParsed = parsed;
+            lastOrigin = { lat: center[0], lon: center[1] };
         // build terrain after parsing so we can merge water into terrain
         try {
             await buildTerrainForBBox(bbox, 48, parsed.water);
@@ -1537,8 +1628,12 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         alert('Lỗi khi lấy dữ liệu OSM');
     } finally {
         showLoader(false);
+            try { saveAppState(); } catch (err) { console.warn('saveAppState failed after scan', err); }
     }
 });
+
+// restore any saved state after initializing map and three
+loadAppState();
 
 // enter 3D: center camera on selection
 // (enter3D removed - flight/ptr-lock controls disabled per user request)

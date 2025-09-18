@@ -92,15 +92,17 @@ export class WeaponSimulation {
             // compute impact position in world meters
             const pos = latLonToMeters(lat, lon, this.origin);
             // glow sphere
-            const geom = new THREE.SphereGeometry(1, 16, 12);
-            const mat = new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.9, depthWrite: false });
+            const geom = new THREE.SphereGeometry(1, 24, 16);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending });
             const glow = new THREE.Mesh(geom, mat);
-            glow.position.set(pos.x, pos.y, (getTerrainHeightAt ? getTerrainHeightAt(pos.x, pos.y) : 0) + 2);
-            glow.scale.set(0.01, 0.01, 0.01);
+            const baseZ = (typeof getTerrainHeightAt === 'function') ? getTerrainHeightAt(pos.x, pos.y) : 0;
+            glow.position.set(pos.x, pos.y, baseZ + 2);
+            // start very small; will expand
+            glow.scale.set(0.02, 0.02, 0.02);
             this.scene.add(glow);
 
             // light flash
-            const light = new THREE.PointLight(0xffcc88, 2.5, weapon.radius * 1.5);
+            const light = new THREE.PointLight(0xffcc88, 3.5, weapon.radius * 2.0);
             light.position.copy(glow.position);
             this.scene.add(light);
 
@@ -118,11 +120,94 @@ export class WeaponSimulation {
                 velocities.push({ x: Math.cos(theta) * (0.5 + Math.random() * 2), y: Math.sin(theta) * (0.5 + Math.random() * 2), z: -0.2 + Math.random() * 0.4 });
             }
             particlesGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            const partMat = new THREE.PointsMaterial({ color: 0xffcc66, size: 0.3, transparent: true, opacity: 0.95 });
+            const partMat = new THREE.PointsMaterial({ color: 0xffcc66, size: 0.3, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending });
             const particles = new THREE.Points(particlesGeo, partMat);
             this.scene.add(particles);
 
-            this.scene.userData.explosions.push({ glow, light, particles, velocities, age: 0, life: 1.2, maxScale: Math.max(weapon.radius * 0.02, 0.2) });
+            // smoke sprite: canvas-generated radial gradient texture
+            function makeSmokeTexture() {
+                const size = 128;
+                const canvas = document.createElement('canvas'); canvas.width = canvas.height = size;
+                const ctx = canvas.getContext('2d');
+                const grad = ctx.createRadialGradient(size/2, size/2, size*0.05, size/2, size/2, size/2);
+                grad.addColorStop(0, 'rgba(200,200,200,0.9)');
+                grad.addColorStop(0.4, 'rgba(160,160,160,0.6)');
+                grad.addColorStop(1, 'rgba(100,100,100,0)');
+                ctx.fillStyle = grad; ctx.fillRect(0,0,size,size);
+                const tex = new THREE.CanvasTexture(canvas);
+                tex.needsUpdate = true;
+                return tex;
+            }
+            const smokeTex = makeSmokeTexture();
+            const smokeMat = new THREE.SpriteMaterial({ map: smokeTex, color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
+            const smoke = new THREE.Sprite(smokeMat);
+            smoke.position.set(pos.x, pos.y, baseZ + 1.5);
+            // scale smoke with blast radius so it's visible for large explosions
+            const smokeScale = Math.max(weapon.radius * 0.03, 1.0);
+            smoke.scale.set(smokeScale, smokeScale, 1);
+            this.scene.add(smoke);
+
+            // debris shards: small boxes with velocity and angular velocity
+            const debris = [];
+            // shard count and sizes scale with weapon radius
+            const shardCount = Math.min(24, Math.max(4, Math.round(weapon.radius / 8)));
+            for (let s = 0; s < shardCount; s++) {
+                const sx = Math.max(0.08, Math.min(1.2, weapon.radius * (0.02 + Math.random() * 0.02)));
+                const geomShard = new THREE.BoxGeometry(sx, sx*0.5, sx*0.2);
+                const matShard = new THREE.MeshStandardMaterial({ color: 0x665544 });
+                const shard = new THREE.Mesh(geomShard, matShard);
+                shard.position.set(pos.x + (Math.random()-0.5)*weapon.radius*0.02, pos.y + (Math.random()-0.5)*weapon.radius*0.02, baseZ + 1 + Math.random()*0.6);
+                // velocities scale with radius
+                shard.userData = { vel: new THREE.Vector3((Math.random()-0.5)*(1 + weapon.radius*0.08), (Math.random()-0.5)*(1 + weapon.radius*0.08), 2 + Math.random()*Math.max(1, weapon.radius*0.08)), angVel: new THREE.Vector3(Math.random()*4, Math.random()*4, Math.random()*4) };
+                this.scene.add(shard);
+                debris.push(shard);
+            }
+
+            // blast sphere (transparent dome) to visualize affected range
+            try {
+                const sphereGeom = new THREE.SphereGeometry(Math.max(1, weapon.radius), 32, 16);
+                const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff5533, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false });
+                const blastSphere = new THREE.Mesh(sphereGeom, sphereMat);
+                // place sphere center so upper dome sits above ground (approx hemisphere)
+                blastSphere.position.set(pos.x, pos.y, baseZ + weapon.radius * 0.5);
+                blastSphere.renderOrder = 0;
+                this.scene.add(blastSphere);
+
+                // radius label sprite (e.g., "R: 100 m")
+                function makeLabelTexture(text) {
+                    const pad = 8;
+                    const font = 'Bold 28px Arial';
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.font = font;
+                    const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
+                    const h = 48;
+                    canvas.width = w; canvas.height = h;
+                    // background transparent
+                    ctx.clearRect(0, 0, w, h);
+                    ctx.font = font;
+                    ctx.fillStyle = 'rgba(255,255,240,0.95)';
+                    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+                    ctx.lineWidth = 4;
+                    ctx.strokeText(text, pad, 34);
+                    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                    ctx.fillText(text, pad, 34);
+                    return new THREE.CanvasTexture(canvas);
+                }
+                const metersText = `R: ${Math.round(weapon.radius)} m`;
+                const labelTex = makeLabelTexture(metersText);
+                const labelMat = new THREE.SpriteMaterial({ map: labelTex, transparent: true });
+                const label = new THREE.Sprite(labelMat);
+                label.position.set(pos.x, pos.y, baseZ + weapon.radius * 0.9 + 0.5);
+                const labelScale = Math.max(weapon.radius * 0.07, 1.0);
+                label.scale.set(labelScale * (labelTex.image.width / labelTex.image.height), labelScale, 1);
+                this.scene.add(label);
+
+                this.scene.userData.explosions.push({ glow, light, particles, velocities, smoke, debris, blastSphere, label, age: 0, life: Math.max(2.5, weapon.radius * 0.08), smokeLife: Math.max(2.5, weapon.radius * 0.12), maxScale: Math.max(weapon.radius * 0.12, 1.0) });
+            } catch (e) {
+                // fallback: no blastSphere if geometry creation fails
+                this.scene.userData.explosions.push({ glow, light, particles, velocities, smoke, debris, age: 0, life: Math.max(2.5, weapon.radius * 0.02), smokeLife: Math.max(2.5, weapon.radius * 0.04), maxScale: Math.max(weapon.radius * 0.06, 0.5) });
+            }
         } catch (e) {
             console.warn('Failed creating 3D explosion visuals', e);
         }
@@ -317,12 +402,12 @@ export class WeaponSimulation {
                 const ex = list[i];
                 ex.age += deltaTime;
                 const t = ex.age / ex.life;
-                // glow expands and fades
-                const s = THREE.MathUtils.lerp(0.01, ex.maxScale, Math.min(1, t));
+                // glow expands and fades (longer life)
+                const s = THREE.MathUtils.lerp(0.02, ex.maxScale, Math.min(1, t));
                 ex.glow.scale.set(s, s, s);
-                ex.glow.material.opacity = Math.max(0, 0.9 * (1 - t));
-                // light fades quickly
-                ex.light.intensity = Math.max(0, 2.5 * (1 - t));
+                ex.glow.material.opacity = Math.max(0, 0.95 * (1 - t));
+                // light fades
+                ex.light.intensity = Math.max(0, 3.5 * (1 - t));
                 // particles move outward and fade
                 try {
                     const posAttr = ex.particles.geometry.attributes.position;
@@ -337,11 +422,66 @@ export class WeaponSimulation {
                     ex.particles.material.opacity = Math.max(0, 0.95 * (1 - t));
                 } catch (e) { /* ignore particle update errors */ }
 
-                if (ex.age >= ex.life) {
+                // smoke update (rises and fades slower)
+                if (ex.smoke) {
+                    const st = Math.min(1, ex.age / (ex.smokeLife || (ex.life * 1.2)));
+                    ex.smoke.position.z += 0.5 * deltaTime; // rise slowly
+                    const sc = THREE.MathUtils.lerp(ex.smoke.scale.x, (ex.maxScale || 1.0) * 2.2, Math.min(1, st));
+                    ex.smoke.scale.set(sc, sc, 1);
+                    if (ex.smoke.material) ex.smoke.material.opacity = Math.max(0, 0.85 * (1 - st));
+                }
+
+                // debris update: apply velocity, gravity and rotation
+                if (ex.debris && ex.debris.length) {
+                    for (let d = ex.debris.length - 1; d >= 0; d--) {
+                        const sh = ex.debris[d];
+                        const ud = sh.userData;
+                        // update position
+                        sh.position.x += ud.vel.x * deltaTime;
+                        sh.position.y += ud.vel.y * deltaTime;
+                        sh.position.z += ud.vel.z * deltaTime;
+                        // gravity
+                        ud.vel.z -= 9.8 * deltaTime * 0.5;
+                        // rotation
+                        sh.rotation.x += ud.angVel.x * deltaTime;
+                        sh.rotation.y += ud.angVel.y * deltaTime;
+                        sh.rotation.z += ud.angVel.z * deltaTime;
+                        // if shard fell below terrain, clamp and slow
+                        const ground = (typeof getTerrainHeightAt === 'function') ? getTerrainHeightAt(sh.position.x, sh.position.y) : 0;
+                        if (sh.position.z <= ground + 0.05) {
+                            sh.position.z = ground + 0.05;
+                            ud.vel.x *= 0.3; ud.vel.y *= 0.3; ud.vel.z *= -0.1;
+                            // slowly fade out material
+                            if (sh.material && sh.material.opacity !== undefined) sh.material.opacity = Math.max(0, (sh.material.opacity || 1) - deltaTime * 0.6);
+                        }
+                        // lifetime removal: base on explosion life
+                        if (ex.age > (ex.life + 1.5)) {
+                            try { this.scene.remove(sh); } catch (e) {}
+                            ex.debris.splice(d, 1);
+                        }
+                    }
+                }
+
+                // fade and remove blastSphere/label after life
+                if (ex.blastSphere) {
+                    const bt = Math.min(1, ex.age / ex.life);
+                    ex.blastSphere.material.opacity = Math.max(0, 0.12 * (1 - bt));
+                    ex.blastSphere.scale.set(1 + bt * 0.02, 1 + bt * 0.02, 1 + bt * 0.02);
+                }
+                if (ex.label) {
+                    const lt = Math.min(1, ex.age / ex.life);
+                    if (ex.label.material) ex.label.material.opacity = Math.max(0, 1 - lt);
+                }
+
+                if (ex.age >= ex.life + Math.max(0.5, (ex.smokeLife || 0))) {
                     try {
                         this.scene.remove(ex.glow);
                         this.scene.remove(ex.light);
                         this.scene.remove(ex.particles);
+                        if (ex.smoke) this.scene.remove(ex.smoke);
+                        if (ex.debris) for (const sh of ex.debris) try { this.scene.remove(sh); } catch (e) {}
+                        if (ex.blastSphere) this.scene.remove(ex.blastSphere);
+                        if (ex.label) this.scene.remove(ex.label);
                     } catch (e) { }
                     list.splice(i, 1);
                 }
