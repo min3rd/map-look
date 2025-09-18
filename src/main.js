@@ -1290,26 +1290,7 @@ function initThree() {
     // ground (plane in XY so Z is height)
     // (ground plane removed per user request)
 
-    // load building texture (if available in assets folder)
-    const loader = new THREE.TextureLoader();
-    loader.load(
-        'assets/138573_header3_small.jpg',
-        (tex) => {
-            buildingTexture = tex;
-            buildingTexture.wrapS = buildingTexture.wrapT = THREE.RepeatWrapping;
-            // if buildings already exist, apply cloned texture to each
-            if (buildings && buildings.length) {
-                for (const b of buildings) {
-                    const t = buildingTexture.clone();
-                    t.needsUpdate = true;
-                    b.material.map = t;
-                    b.material.needsUpdate = true;
-                }
-            }
-        },
-        undefined,
-        (err) => { }
-    );
+    // building textures intentionally disabled; buildings use solid colors
 
     window.addEventListener('resize', () => {
         const w = container.clientWidth, h = container.clientHeight;
@@ -1327,6 +1308,9 @@ function addBuildingsToScene(meshes) {
     // compute bounds for selection area (if available)
     const selBounds = (lastBBox && lastOrigin) ? getLocalBoundsForBBox(lastBBox, lastOrigin) : null;
 
+    // palette of pleasant building colors
+    const palette = [0xd9e2ec, 0xc9d6e3, 0xf2d7d5, 0xe6e2c8, 0xdbe7d6, 0xe6d6f0, 0xf0e0c8];
+    let bidx = 0;
     for (const m of meshes) {
         // if selection bounds exist, skip meshes completely outside selection
         try { if (selBounds && m.pts && !ptsIntersectBounds(m.pts, selBounds)) continue; } catch (e) { }
@@ -1347,24 +1331,20 @@ function addBuildingsToScene(meshes) {
             extrude.attributes.position.needsUpdate = true;
             extrude.computeVertexNormals();
         } catch (e) { /* if geometry not as expected, fallback to centroid placement below */ }
-        let mat;
-        if (buildingTexture) {
-            // clone texture per-building so repeat/wrap changes don't affect others
-            const t = buildingTexture.clone();
-            t.wrapS = t.wrapT = THREE.RepeatWrapping;
-            // set reasonable repeat based on footprint bounding box
-            const xs = m.pts.map(p => p.x);
-            const ys = m.pts.map(p => p.y);
-            const sizeX = Math.max(...xs) - Math.min(...xs) || 1;
-            const sizeY = Math.max(...ys) - Math.min(...ys) || 1;
-            const repeatX = Math.max(1, Math.round(sizeX / 10));
-            const repeatY = Math.max(1, Math.round(sizeY / 10));
-            t.repeat.set(repeatX, repeatY);
-            t.needsUpdate = true;
-            mat = new THREE.MeshLambertMaterial({ map: t });
-        } else {
-            mat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
-        }
+        // compute footprint approximate area to pick a deterministic color
+        let approxArea = 0;
+        try {
+            const ptsForArea = m.pts || [];
+            let a = 0;
+            for (let i = 0, l = ptsForArea.length; i < l; i++) {
+                const A = ptsForArea[i], B = ptsForArea[(i + 1) % l];
+                a += (A.x * B.y) - (B.x * A.y);
+            }
+            approxArea = Math.abs(a) * 0.5;
+        } catch (e) { approxArea = bidx; }
+        const colorIdx = Math.abs(Math.round(approxArea || bidx)) % palette.length;
+        const colorHex = palette[colorIdx];
+        const mat = new THREE.MeshLambertMaterial({ color: colorHex });
         const mesh = new THREE.Mesh(extrude, mat);
         // If extrude geometry modification failed, fall back to centroid-based placement
         if (!extrude.attributes || !extrude.attributes.position) {
@@ -1388,7 +1368,8 @@ function addBuildingsToScene(meshes) {
             mesh.userData.footprintArea = area; // m^2
             mesh.userData.tags = m.tags || {};
         } catch (e) { mesh.userData.footprintArea = 0; mesh.userData.tags = m.tags || {}; }
-        buildings.push(mesh);
+    buildings.push(mesh);
+    bidx++;
         // Compute bounding box and normals for later use in weapon simulation
         mesh.geometry.computeBoundingBox();
         mesh.geometry.computeVertexNormals();
@@ -1875,7 +1856,7 @@ function animate(currentTime) {
     renderer.render(scene, camera);
 }
 
-let buildingTexture = null;
+// building textures removed - use per-building colors only
 
 // Wire UI
 initMap();
